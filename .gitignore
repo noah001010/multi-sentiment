@@ -1,0 +1,40 @@
+# 動画・音声データ
+*.mp4
+*.wav
+*.avi
+
+# 画像・デバッグ出力
+*.jpg
+*.png
+output_debug/
+
+# モデルの重み・特徴量データ
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.npy
+*.pkl
+models/
+weights/
+
+# 出力スコア・その他
+*.csv
+*.json
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+
+# 重いデータフォルダ（今回特定した犯人たち）
+data/
+output/
+output_5min/
+output_debug/
+test_output/
+
+# 仮想環境（今回追加！）
+.venv/
+venv/
+env/
+
+.env

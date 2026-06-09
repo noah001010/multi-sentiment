@@ -1,0 +1,40 @@
+# Core
+numpy>=1.24.0
+pandas>=2.0.0
+tqdm
+
+# Deep Learning / Math
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# Audio Processing
+librosa>=0.10.0
+soundfile
+pyannote.audio>=3.1.0
+opensmile>=2.5.0
+faster-whisper>=0.10.0
+
+# Visual Processing
+opencv-python-headless
+py-feat>=0.5.0
+scikit-learn
+scikit-image
+mediapipe  # Often used as backend for face detection
+
+# Text Processing
+transformers>=4.30.0
+sentencepiece
+fugashi
+unidic-lite
+ipadic
+
+# Visualization & App
+streamlit>=1.30.0
+plotly>=5.18.0
+matplotlib
+
+# Development
+black
+isort
+pytest
