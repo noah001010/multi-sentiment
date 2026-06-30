@@ -46,7 +46,7 @@ def main():
         "--model_path",
         type=str,
         default=None,
-        help="ローカルのHugging Faceモデルへのディレクトリパス (省略時はデフォルトFin-BERT)",
+        help="ローカルのHugging Faceモデルへのディレクトリパス (省略時はデフォルト text_model/model_32)",
     )
     parser.add_argument(
         "--device",

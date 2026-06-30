@@ -4,11 +4,29 @@ import scipy.integrate
 if not hasattr(scipy.integrate, 'simps'):
     scipy.integrate.simps = scipy.integrate.simpson
 
+import scipy.stats
+if not hasattr(scipy.stats, 'binom_test'):
+    scipy.stats.binom_test = scipy.stats.binomtest
+
+import numpy as np
+if not hasattr(np, 'ComplexWarning'):
+    class ComplexWarning(Warning):
+        pass
+    np.ComplexWarning = ComplexWarning
+
+if not hasattr(np, 'mat'):
+    np.mat = np.asmatrix
+
+import torchvision.io
+if not hasattr(torchvision.io, 'read_video'):
+    torchvision.io.read_video = lambda *args, **kwargs: None
+
 # Stub lib2to3
 import types
 if 'lib2to3' not in sys.modules:
     lib2to3 = types.ModuleType('lib2to3')
     lib2to3.pytree = types.ModuleType('lib2to3.pytree')
+    lib2to3.pytree.convert = lambda x: x
     sys.modules['lib2to3'] = lib2to3
     sys.modules['lib2to3.pytree'] = lib2to3.pytree
 

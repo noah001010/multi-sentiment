@@ -153,8 +153,16 @@ git pull origin main
 
 # 必要ライブラリのインストール（初回のみ）
 pip install -r requirements.txt
-# または
-./setup.sh
+
+# ★ 教授モデルの配置（初回のみ）
+# モデルファイルはGitHub管理外のため、サーバーに直接配置する必要があります。
+# text_model/model_32/checkpoint-25137/ に以下のファイルを配置:
+#   - model.safetensors  (モデル重み)
+#   - optimizer.pt       (オプティマイザー状態)
+#   - training_args.bin  (訓練設定)
+#   - rng_state.pth      (乱数状態)
+#   - tokenizer.model    (トークナイザーモデル)
+# ※ config.json, tokenizer.json, tokenizer_config.json などはGitに含まれます
 ```
 
 ### 1. Step 1: 音声認識 & 文字起こし (ASR)
@@ -168,7 +176,7 @@ python scripts/run_step1_asr.py --video_path data/boj_5min.mp4 --output_path out
 ### 2. Step 2: 話者特定 (Diarization)
 発話したのが誰（総裁か記者か）を特定する情報を生成します。
 ```bash
-# ※環境変数 HF_TOKEN が設定されている必要があります。ない場合はダミー値でフォールバックします。
+# ⮳ 環境変数 HF_TOKEN が設定されている必要があります。未設定の場合はエラーで停止します。
 python scripts/run_step2_diarization.py --video_path data/boj_5min.mp4 --output_path output/raw/diarization.csv
 ```
 *   **結果確認**: `output/raw/diarization.csv` が作成され、時間帯ごとの話者IDが記述されていることを確認します。
@@ -182,11 +190,11 @@ python scripts/run_step3_facecrop.py --video_path data/boj_5min.mp4 --diarizatio
 *   **結果確認**: `output/faces/` ディレクトリの中に、切り出された大量の顔画像（例: `face_000120.jpg`）が存在することを確認します。
 
 ### 4. Step 4: テキスト感情分析
-文字起こしテキスト（Step 1の出力）から、BERTを用いて経済的センチメントを算出します。
+文字起こしテキスト（Step 1の出力）から、教授提供のModernBERT回帰モデルを用いて経済インパクトスコアを算出します。
 ```bash
 python scripts/run_step4_text.py --input_path output/transcription.csv --output_path output/text_features.csv
 ```
-*   **結果確認**: `output/text_features.csv` が作成され、各行に感情スコア（`sentiment_score`）が付与されていることを確認します。
+*   **結果確認**: `output/text_features.csv` が作成され、各行に経済インパクトスコア（`sentiment_score`）が付与されていることを確認します。
 
 ### 5. Step 5: 表情感情分析 (Action Unit)
 Step 3 で切り出された顔画像群から、Py-Feat を用いて表情のAction Unit特徴（AU04, AU12など）を抽出します。

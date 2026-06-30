@@ -102,12 +102,11 @@ def main():
     # 2. Pyannote話者分離パイプラインの実行
     hf_token = os.getenv("HF_TOKEN")
     if not hf_token or hf_token == "PASTE_YOUR_TOKEN_HERE":
-        logger.warning("HF_TOKEN が設定されていません。SOTA Diarization をスキップし Mock 方式を使用します。")
-        # ダミーデータ生成（0〜300秒すべて SPEAKER_00 とする）
-        diar_df = pd.DataFrame([{"start": 0.0, "end": 300.0, "speaker": "SPEAKER_00"}])
-        diar_df.to_csv(output_path, index=False)
-        logger.info(f"Mock話者分離結果を保存しました: {output_path}")
-        return
+        logger.error(
+            "HF_TOKEN が設定されていません。pyannote/speaker-diarization-3.1 の利用にはトークンが必要です。\n"
+            ".env ファイルに HF_TOKEN=<your_token> を設定してください。"
+        )
+        sys.exit(1)
 
     logger.info("pyannote.audio から SOTA 話者分離モデルをロード中...")
     try:
@@ -137,10 +136,7 @@ def main():
 
     except Exception as e:
         logger.error(f"話者分離の実行中にエラーが発生しました: {e}")
-        logger.warning("Mock方式にフォールバックします...")
-        diar_df = pd.DataFrame([{"start": 0.0, "end": 300.0, "speaker": "SPEAKER_00"}])
-        diar_df.to_csv(output_path, index=False)
-        logger.info(f"Mock話者分離結果を保存しました: {output_path}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

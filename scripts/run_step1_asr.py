@@ -73,33 +73,53 @@ def main():
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1. ffmpegを用いて動画から音声を抽出
-    temp_wav = Path(tempfile.mktemp(suffix=".wav"))
-    logger.info(f"動画から一時音声ファイルを作成中: {temp_wav}")
-    try:
-        # 16kHz モノラルに変換
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-i",
-                str(video_path),
-                "-ar",
-                "16000",
-                "-ac",
-                "1",
-                "-q:a",
-                "0",
-                "-map",
-                "a",
-                str(temp_wav),
-                "-y",
-            ],
-            check=True,
-            capture_output=True,
-        )
-    except subprocess.CalledProcessError as e:
-        logger.error(f"ffmpegによる音声抽出に失敗しました: {e.stderr.decode('utf-8')}")
-        sys.exit(1)
+    # 1. 音声ファイル（wav）の準備
+    permanent_wav = video_path.with_suffix(".wav")
+    wav_to_process = None
+    temp_wav = None
+
+    if video_path.suffix.lower() == ".wav":
+        logger.info(f"入力ファイルがすでにWav音声形式です: {video_path}")
+        wav_to_process = video_path
+    elif permanent_wav.exists():
+        logger.info(f"同名の音声ファイルがすでに存在するため、ffmpegでの抽出をスキップします: {permanent_wav}")
+        wav_to_process = permanent_wav
+    else:
+        # ffmpegを用いて動画から音声を抽出
+        temp_wav = Path(tempfile.mktemp(suffix=".wav"))
+        logger.info(f"動画から一時音声ファイルを作成中: {temp_wav}")
+        try:
+            # 16kHz モノラルに変換
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-i",
+                    str(video_path),
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    "-q:a",
+                    "0",
+                    "-map",
+                    "a",
+                    str(temp_wav),
+                    "-y",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            import shutil
+            shutil.copy(temp_wav, permanent_wav)
+            logger.info(f"音声波形ファイルをデータフォルダに保存しました: {permanent_wav}")
+            wav_to_process = permanent_wav
+        except FileNotFoundError:
+            logger.error("エラー: システムに 'ffmpeg' がインストールされていないため、動画から音声を抽出できません。")
+            logger.error("Mac の場合は 'brew install ffmpeg' を実行してインストールするか、すでに抽出済みの .wav ファイルを直接 --video_path に指定してください。")
+            sys.exit(1)
+        except subprocess.CalledProcessError as e:
+            logger.error(f"ffmpegによる音声抽出に失敗しました: {e.stderr.decode('utf-8')}")
+            sys.exit(1)
 
     # 2. Whisperによる文字起こし実行
     try:
@@ -108,20 +128,13 @@ def main():
             device=args.device,
             compute_type="float16" if "cuda" in args.device else "int8",
         )
-        results = aligner.transcribe(str(temp_wav), language=args.language)
+        results = aligner.transcribe(str(wav_to_process), language=args.language)
         aligner.save_results(results, str(output_path))
         logger.info(f"文字起こし完了。結果保存先: {output_path}")
 
-        # また、将来の音声特徴量抽出用に、同じディレクトリに正式なWavファイルを残しておくと便利です
-        permanent_wav = video_path.with_suffix(".wav")
-        if not permanent_wav.exists():
-            import shutil
-            shutil.copy(temp_wav, permanent_wav)
-            logger.info(f"音声波形ファイルをデータフォルダに保存しました: {permanent_wav}")
-
     finally:
         # 一時ファイルのクリーンアップ
-        if temp_wav.exists():
+        if temp_wav and temp_wav.exists():
             temp_wav.unlink()
 
 

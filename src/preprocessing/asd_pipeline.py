@@ -85,17 +85,17 @@ class VisualASD:
         if 'is_speaking' in asd_df.columns:
             active_units = asd_df[asd_df['is_speaking'] == 1]
         elif 'start' in asd_df.columns and 'end' in asd_df.columns:
-            # For Diarization, we sample 1 frame per second within each segment
+            # 2秒間隔でフレームをサンプリング
+            # 根拠: Ekman & Friesen (2003) - 表情の持続時間は0.5〜4秒
+            CROP_INTERVAL_SEC = 2
             active_units = []
             fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
             for _, row in asd_df.iterrows():
-                # For BoJ Governor analysis, we might want to filter for SPEAKER_00 etc.
-                # Here we just take all indicated turns as "active" for cropping
                 s, e = row['start'], row['end']
-                for t in range(int(s), int(e) + 1):
+                for t in range(int(s), int(e) + 1, CROP_INTERVAL_SEC):
                     active_units.append({
                         "frame": int(t * fps),
-                        "bbox": [100, 100, 400, 400] # Default center-ish crop if bbox missing
+                        "bbox": None  # 顔検出で決定する
                     })
             active_units = pd.DataFrame(active_units)
         else:
@@ -114,8 +114,8 @@ class VisualASD:
             ret, frame = cap.read()
             if ret:
                 bbox = row.get('bbox', None)
-                if bbox is None or bbox == [100, 100, 400, 400]:
-                    # Try to detect face in the frame
+                if bbox is None:
+                    # HaarCascade で顔検出
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                     faces = face_cascade.detectMultiScale(gray, 1.3, 5)
                     if len(faces) > 0:
@@ -125,10 +125,9 @@ class VisualASD:
                         pad = int(fw * 0.2)
                         bbox = [fx-pad, fy-pad, fx+fw+pad, fy+fh+pad]
                     else:
-                        # Fallback to center of frame
-                        h, w, _ = frame.shape
-                        cw, ch = w // 2, h // 2
-                        bbox = [cw-200, ch-200, cw+200, ch+200]
+                        # 顔未検出 → このフレームはスキップ（フォールバックなし）
+                        logger.debug(f"No face detected in frame {frame_idx}, skipping.")
+                        continue
 
                 if isinstance(bbox, str):
                     import ast

@@ -12,38 +12,40 @@ logger = logging.getLogger(__name__)
 
 class TextAnalyzer:
     """
-    Text sentiment/stance analyzer.
+    Text sentiment/stance analyzer using a local ModernBERT regression model.
 
-    Supports two modes:
-      1. Local ModernBERT (or any HF-format model): set model_path to a directory
-         containing config.json, tokenizer files, and model weights.
-      2. Remote HF model: set model_name (legacy behaviour, uses transformers.pipeline).
+    教授提供の ModernBertForSequenceClassification (regression head) を使用。
+    入力文を経済インパクトスコアとして連続値で返す。
 
-    Score convention (unified):
+    Score convention:
         score > 0  →  economically positive / hawkish
         score < 0  →  economically negative / dovish
         score ≈ 0  →  neutral
     """
 
+    # デフォルトモデルパス（プロジェクトルートからの相対パス）
+    DEFAULT_MODEL_DIR = "text_model/model_32"
+
     def __init__(
         self,
         model_path: Optional[str] = None,
-        model_name: str = "oshizo/japanese-roberta-sentiment-financial-it",
     ):
         """
         Args:
-            model_path: Path to a local HF-format model directory.
-                        Takes priority over model_name when provided.
-            model_name: HuggingFace model ID (used only when model_path is None).
+            model_path: Path to a local HF-format model directory containing
+                        a checkpoint-* subdirectory.
+                        Defaults to text_model/model_32.
         """
-        device_id = 0 if torch.cuda.is_available() else -1
-        self.device = torch.device("cuda" if device_id == 0 else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"TextAnalyzer device: {self.device}")
 
-        if model_path is not None:
-            self._load_local_model(model_path)
-        else:
-            self._load_remote_pipeline(model_name, device_id)
+        # モデルパスの解決
+        if model_path is None:
+            # プロジェクトルートからの相対パスを絶対パスに変換
+            project_root = Path(__file__).resolve().parent.parent.parent
+            model_path = str(project_root / self.DEFAULT_MODEL_DIR)
+
+        self._load_local_model(model_path)
 
         # Uncertainty lexical markers (Hedges)
         self.hedge_words = [
@@ -55,44 +57,65 @@ class TextAnalyzer:
     # Private: model loading
     # ------------------------------------------------------------------
 
-    def _load_local_model(self, model_path: str) -> None:
-        """Load a local HF model directory for inference."""
-        path = Path(model_path)
-        if not (path / "config.json").exists():
+    def _resolve_checkpoint_path(self, model_dir: str) -> Path:
+        """
+        モデルディレクトリから checkpoint-* サブディレクトリを自動検索する。
+        教授の predict_score.py と同じロジック。
+
+        1. model_dir 直下に config.json があればそのまま使用
+        2. なければ checkpoint-* を検索
+        """
+        path = Path(model_dir)
+
+        # 直下に config.json がある場合はそのまま使用
+        if (path / "config.json").exists():
+            return path
+
+        # checkpoint-* サブディレクトリを検索
+        checkpoints = sorted([
+            d for d in path.iterdir()
+            if d.is_dir() and d.name.startswith("checkpoint-")
+        ])
+
+        if not checkpoints:
+            # さらに1段下を探索（model_32/checkpoint-25137 のような構造）
+            for subdir in sorted(path.iterdir()):
+                if subdir.is_dir():
+                    sub_checkpoints = sorted([
+                        d for d in subdir.iterdir()
+                        if d.is_dir() and d.name.startswith("checkpoint-")
+                    ])
+                    if sub_checkpoints:
+                        ckpt = sub_checkpoints[0]
+                        logger.info(f"Found checkpoint: {ckpt}")
+                        return ckpt
+
             raise FileNotFoundError(
-                f"config.json not found in '{model_path}'. "
-                "Please pass a valid HF model directory."
+                f"No checkpoint-* directory or config.json found in '{model_dir}'. "
+                "Please provide a valid model directory."
             )
-        logger.info(f"Loading local model from: {path}")
-        self.tokenizer = AutoTokenizer.from_pretrained(str(path))
-        self.model = AutoModelForSequenceClassification.from_pretrained(str(path))
+
+        ckpt = checkpoints[0]
+        logger.info(f"Found checkpoint: {ckpt}")
+        return ckpt
+
+    def _load_local_model(self, model_dir: str) -> None:
+        """Load a local HF model directory for inference."""
+        ckpt_path = self._resolve_checkpoint_path(model_dir)
+        logger.info(f"Loading model from: {ckpt_path}")
+
+        self.tokenizer = AutoTokenizer.from_pretrained(str(ckpt_path))
+        self.model = AutoModelForSequenceClassification.from_pretrained(str(ckpt_path))
         self.model.to(self.device)
         self.model.eval()
 
         self.num_labels = self.model.config.num_labels
+        self.problem_type = getattr(self.model.config, "problem_type", "")
         logger.info(
-            f"Local model loaded. num_labels={self.num_labels}, "
+            f"Model loaded. num_labels={self.num_labels}, "
+            f"problem_type={self.problem_type}, "
             f"id2label={getattr(self.model.config, 'id2label', 'N/A')}"
         )
-        self._use_local = True
-
-    def _load_remote_pipeline(self, model_name: str, device_id: int) -> None:
-        """Load a remote (or cached) HF model via transformers pipeline (legacy)."""
-        from transformers import pipeline as hf_pipeline
-        logger.info(f"Loading remote model: {model_name}")
-        hf_token = os.getenv("HF_TOKEN")
-        try:
-            self._pipe = hf_pipeline(
-                "sentiment-analysis",
-                model=model_name,
-                device=device_id,
-                token=hf_token,
-            )
-        except Exception as e:
-            fallback = "koheiduck/bert-japanese-finetuned-sentiment"
-            logger.warning(f"Could not load {model_name}: {e}. Falling back to {fallback}")
-            self._pipe = hf_pipeline("sentiment-analysis", model=fallback, device=device_id)
-        self._use_local = False
 
     # ------------------------------------------------------------------
     # Public: single-sentence inference
@@ -106,13 +129,6 @@ class TextAnalyzer:
             float: positive = economically positive/hawkish,
                    negative = economically negative/dovish.
         """
-        if self._use_local:
-            return self._score_local(text)
-        else:
-            return self._score_pipeline(text)
-
-    def _score_local(self, text: str) -> float:
-        """Inference via local model weights."""
         inputs = self.tokenizer(
             text,
             return_tensors="pt",
@@ -127,8 +143,7 @@ class TextAnalyzer:
 
         logits = logits[0]  # (num_labels,)
 
-        if (self.num_labels or 1) == 1 or \
-                getattr(self.model.config, "problem_type", "") == "regression":
+        if (self.num_labels or 1) == 1 or self.problem_type == "regression":
             # Regression head: logit is already the score
             return float(logits[0].cpu())
 
@@ -139,17 +154,6 @@ class TextAnalyzer:
         # Try to auto-detect label indices
         pos_idx, neg_idx = self._detect_label_indices(id2label, len(probs))
         return float(probs[pos_idx] - probs[neg_idx])
-
-    def _score_pipeline(self, text: str) -> float:
-        """Inference via transformers.pipeline (legacy remote model)."""
-        result = self._pipe([text], truncation=True, max_length=512)[0]
-        label = result["label"].lower()
-        score = result["score"]
-        if "positive" in label or "pos" in label:
-            return score
-        elif "negative" in label or "neg" in label:
-            return -score
-        return 0.0
 
     def _detect_label_indices(self, id2label: dict, n: int):
         """Heuristically find positive / negative label indices."""
@@ -285,7 +289,7 @@ if __name__ == "__main__":
         "--model_path",
         default=None,
         help="Path to a local HF model directory (optional). "
-             "Omit to use the default remote Fin-BERT model.",
+             "Omit to use the default professor model (text_model/model_32).",
     )
     args = ap.parse_args()
 

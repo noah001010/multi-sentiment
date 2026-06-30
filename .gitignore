@@ -8,19 +8,24 @@
 *.png
 output_debug/
 
-# モデルの重み・特徴量データ
+# モデルの重みファイル（大容量）
 *.pt
 *.pth
-*.bin
 *.safetensors
 *.npy
 *.pkl
 models/
 weights/
 
+# 教授モデルの重みファイル（Git管理外、サーバーに直接配置）
+text_model/model_32/checkpoint-*/model.safetensors
+text_model/model_32/checkpoint-*/optimizer.pt
+text_model/model_32/checkpoint-*/training_args.bin
+text_model/model_32/checkpoint-*/rng_state.pth
+text_model/model_32/checkpoint-*/tokenizer.model
+
 # 出力スコア・その他
 *.csv
-*.json
 __pycache__/
 .ipynb_checkpoints/
 .DS_Store
