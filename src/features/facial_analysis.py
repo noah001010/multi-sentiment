@@ -35,7 +35,10 @@ import cv2
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from feat import Detector
+try:
+    from feat import Detector
+except ImportError:
+    from feat import Detectorv1 as Detector
 from scipy.spatial import distance
 
 logger = logging.getLogger(__name__)
