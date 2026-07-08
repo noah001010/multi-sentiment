@@ -102,7 +102,7 @@ class FacialAnalyzer:
                 # v2.0+ uses .detect(inputs)
                 # v0.6.x uses .detect_image(inputs)
                 if hasattr(self.detector, "detect"):
-                    detected = self.detector.detect(batch_files, batch_size=batch_size, progress_bar=False)
+                    detected = self.detector.detect(batch_files, batch_size=batch_size, output_size=(224, 224), progress_bar=False)
                 else:
                     detected = self.detector.detect_image(batch_files, batch_size=batch_size)
                 # Results is a DataFrame
