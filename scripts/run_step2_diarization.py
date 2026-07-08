@@ -116,7 +116,21 @@ def main():
             pipeline.to(torch.device(args.device))
 
         logger.info("音声解析を実行中...")
-        diarization = pipeline(str(wav_path))
+        res = pipeline(str(wav_path))
+
+        # Generator対策: 1ファイル入力時にジェネレータが返された場合、StopIterationから戻り値を取得する
+        if hasattr(res, "__next__") or type(res).__name__ == "generator":
+            try:
+                while True:
+                    next(res)
+            except StopIteration as e:
+                diarization = e.value
+        else:
+            diarization = res
+
+        # DiarizeOutput対策: 戻り値がDiarizeOutputオブジェクトの場合、speaker_diarizationを取り出す
+        if hasattr(diarization, "speaker_diarization"):
+            diarization = diarization.speaker_diarization
 
         # 結果をリストに変換
         diar_data = []
