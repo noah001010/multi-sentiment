@@ -76,9 +76,9 @@ def main():
     )
     parser.add_argument(
         "--governor_only",
-        action="store_true",
-        default=True,
-        help="回帰分析に総裁 (is_governor == True) の区間のみを使用するかどうか",
+        type=str,
+        default="true",
+        help="回帰分析に総裁 (is_governor == True) の区間のみを使用するかどうか (true/false)",
     )
     args = parser.parse_args()
 
@@ -97,7 +97,8 @@ def main():
     logger.info("統合結果データをロード中...")
     df_integ = pd.read_csv(integrated_path)
 
-    if args.governor_only and "is_governor" in df_integ.columns:
+    is_gov_only = str(args.governor_only).lower() == 'true'
+    if is_gov_only and "is_governor" in df_integ.columns:
         logger.info("分析対象を総裁（is_governor == True）の発話区間に絞り込みます。")
         df_integ = df_integ[df_integ["is_governor"] == True].copy()
     
