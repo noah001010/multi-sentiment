@@ -125,7 +125,7 @@ def main():
     
     # 1分単位でリサンプリングして平均
     logger.info("感情特徴量を1分足単位にリサンプリングしてアライメント中...")
-    df_integ_1min = df_integ.resample('1min').mean().reset_index()
+    df_integ_1min = df_integ.resample('1min').mean(numeric_only=True).reset_index()
 
     # マージ
     df_merged = pd.merge(df_fin, df_integ_1min, on='datetime', how='inner')
