@@ -98,8 +98,13 @@ class FacialAnalyzer:
         for i in tqdm(range(0, len(path_strs), batch_size), desc="Facial AU Analysis"):
             batch_files = path_strs[i:i+batch_size]
             try:
-                # Detect
-                detected = self.detector.detect_image(batch_files)
+                # Compatibility across py-feat versions:
+                # v2.0+ uses .detect(inputs)
+                # v0.6.x uses .detect_image(inputs)
+                if hasattr(self.detector, "detect"):
+                    detected = self.detector.detect(batch_files, batch_size=batch_size, progress_bar=False)
+                else:
+                    detected = self.detector.detect_image(batch_files, batch_size=batch_size)
                 # Results is a DataFrame
                 all_results.append(detected)
             except Exception as e:
