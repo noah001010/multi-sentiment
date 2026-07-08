@@ -35,6 +35,8 @@ def load_and_filter_forex_data(csv_path: str, conference_start_time_str: str) ->
     df = pd.read_csv(csv_path, sep=';', header=None, 
                      names=['datetime_str', 'open', 'high', 'low', 'close', 'volume'])
     df['datetime'] = pd.to_datetime(df['datetime_str'], format='%Y%m%d %H%M%S')
+    # HistData.com は DSTなしの米国東部標準時(EST=GMT-5)固定。日本(JST=GMT+9)とは常に14時間時差。
+    df['datetime'] = df['datetime'] + pd.Timedelta(hours=14)
     df.sort_values('datetime', inplace=True)
     df['return'] = np.log(df['close'] / df['close'].shift(1)) * 100
     start_time = pd.to_datetime(conference_start_time_str)
