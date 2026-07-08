@@ -34,10 +34,10 @@ class AudioAnalyzer:
         # loudness_sma3_amean -> Loudness
         
         result = {
-            "F0_mean": df.get("F0semitoneFrom27.5Hz_sma3nz_amean", [0.0])[0],
-            "jitter": df.get("jitterLocal_sma3nz_amean", [0.0])[0],
-            "shimmer": df.get("shimmerLocaldB_sma3nz_amean", [0.0])[0],
-            "loudness": df.get("loudness_sma3_amean", [0.0])[0]
+            "F0_mean": float(df["F0semitoneFrom27.5Hz_sma3nz_amean"].iloc[0]) if "F0semitoneFrom27.5Hz_sma3nz_amean" in df.columns else 0.0,
+            "jitter": float(df["jitterLocal_sma3nz_amean"].iloc[0]) if "jitterLocal_sma3nz_amean" in df.columns else 0.0,
+            "shimmer": float(df["shimmerLocaldB_sma3nz_amean"].iloc[0]) if "shimmerLocaldB_sma3nz_amean" in df.columns else 0.0,
+            "loudness": float(df["loudness_sma3_amean"].iloc[0]) if "loudness_sma3_amean" in df.columns else 0.0
         }
         
         # Diagnostic: check for flat-line
