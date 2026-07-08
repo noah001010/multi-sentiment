@@ -26,7 +26,23 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.features.end_to_end_sentiment_pipeline import load_and_filter_forex_data
+def load_and_filter_forex_data(csv_path: str, conference_start_time_str: str) -> pd.DataFrame:
+    """
+    HistData.com の汎用ASCIIフォーマット (USD/JPY 1分足など) を読み込み、
+    指定された会見開始時刻から1時間分のリターンを抽出する。
+    """
+    print(f"[{csv_path}] HistDataの読み込みと前処理を開始します...")
+    df = pd.read_csv(csv_path, sep=';', header=None, 
+                     names=['datetime_str', 'open', 'high', 'low', 'close', 'volume'])
+    df['datetime'] = pd.to_datetime(df['datetime_str'], format='%Y%m%d %H%M%S')
+    df.sort_values('datetime', inplace=True)
+    df['return'] = np.log(df['close'] / df['close'].shift(1)) * 100
+    start_time = pd.to_datetime(conference_start_time_str)
+    end_time = start_time + pd.Timedelta(hours=1)
+    filtered_df = df[(df['datetime'] >= start_time) & (df['datetime'] <= end_time)].copy()
+    filtered_df.dropna(subset=['return'], inplace=True)
+    print(f"  -> 抽出されたデータ件数: {len(filtered_df)}件 (期間: {start_time} 〜 {end_time})")
+    return filtered_df[['datetime', 'return']]
 
 logging.basicConfig(
     level=logging.INFO,
