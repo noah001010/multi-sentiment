@@ -41,6 +41,18 @@ except ImportError:
     from feat import Detectorv1 as Detector
 from scipy.spatial import distance
 
+def check_cuda_working() -> bool:
+    import torch
+    if not torch.cuda.is_available():
+        return False
+    try:
+        x = torch.randn(1, 1).to("cuda")
+        y = torch.nn.functional.linear(x, x)
+        return True
+    except Exception as e:
+        logger.warning(f"CUDA is available in PyTorch, but kernel execution failed (e.g. GPU compute capability mismatch): {e}. Falling back to CPU for safety.")
+        return False
+
 logger = logging.getLogger(__name__)
 
 class FacialAnalyzer:
@@ -49,8 +61,7 @@ class FacialAnalyzer:
         Initialize Py-Feat Detector.
         We use 'retinaface' for detection, 'resnet' for AUs.
         """
-        import torch
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = "cuda" if check_cuda_working() else "cpu"
         logger.info(f"Initializing Py-Feat Detector on {device}...")
         # SOTA Setup: RetinaFace for detection, ResNet-50 for AUs (Higher precision than SVM/RF)
         self.detector = Detector(

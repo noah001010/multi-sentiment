@@ -10,12 +10,24 @@ from transformers import AutoProcessor, AutoModelForAudioClassification
 
 logger = logging.getLogger(__name__)
 
+def check_cuda_working() -> bool:
+    if not torch.cuda.is_available():
+        return False
+    try:
+        x = torch.randn(1, 1).to("cuda")
+        y = torch.nn.functional.linear(x, x)
+        return True
+    except Exception as e:
+        logger.warning(f"CUDA is available in PyTorch, but kernel execution failed (e.g. GPU compute capability mismatch): {e}. Falling back to CPU for safety.")
+        return False
+
+
 class AudioAnalyzer:
     def __init__(self):
         """
         Initialize Audio Analyzer with:
         1. OpenSMILE (eGeMAPSv02) for baseline acoustic parameters.
-        2. audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim on GPU for Valence, Arousal, Dominance.
+        2. audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim for Valence, Arousal, Dominance.
         """
         # 1. OpenSMILE Initialization
         try:
@@ -29,7 +41,7 @@ class AudioAnalyzer:
             raise RuntimeError(f"OpenSMILE initialization failed: {e}")
 
         # 2. Wav2Vec2 Deep Emotion Model Initialization
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if check_cuda_working() else "cpu")
         logger.info(f"Initializing Wav2Vec2 Emotion model on device: {self.device}")
         try:
             model_name = "audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim"
