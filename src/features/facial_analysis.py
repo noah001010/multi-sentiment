@@ -70,9 +70,9 @@ class FacialAnalyzer:
         ear = (A + B) / (2.0 * C)
         return ear
 
-    def process_face_crops(self, crop_dir: str) -> pd.DataFrame:
+    def process_face_crops(self, crop_dir: str, batch_size: int = 256) -> pd.DataFrame:
         """
-        Process a directory of face crops to extract AUs and Blink info.
+        Process a directory of face crops to extract AUs, Valence/Arousal, and Blink info.
         Assumes filenames are formatted as 'face_{frame_id:06d}.jpg'.
         """
         image_paths = sorted(list(Path(crop_dir).glob("*.jpg")))
@@ -85,8 +85,7 @@ class FacialAnalyzer:
         # Py-Feat batch processing
         # Note: detector.detect_image can take a list of filenames
         # For large lists, we should batch.
-        # RTX 5080 (16GB) can handle large batches. Let's aim for 128-256.
-        batch_size = 128
+        # RTX 5080 (16GB) can handle large batches. Let's aim for 256.
         all_results = []
         
         path_strs = [str(p) for p in image_paths]
@@ -137,6 +136,27 @@ class FacialAnalyzer:
             au4 = row.get("AU04", np.nan)
             au12 = row.get("AU12", np.nan)
             
+            # Basic Emotions
+            happy = row.get("happiness", row.get("happy", 0.0))
+            angry = row.get("anger", row.get("angry", 0.0))
+            sad = row.get("sadness", row.get("sad", 0.0))
+            fear = row.get("fear", 0.0)
+            disgust = row.get("disgust", 0.0)
+            surprise = row.get("surprise", 0.0)
+            neutral = row.get("neutral", 0.0)
+            
+            # Valence & Arousal extraction & fallbacks
+            valence = row.get("valence", np.nan)
+            arousal = row.get("arousal", np.nan)
+            
+            if pd.isna(valence) or valence is None:
+                # Valence fallback calculation: positive - negatives
+                valence = float(happy) - float(angry + disgust + fear + sad)
+                
+            if pd.isna(arousal) or arousal is None:
+                # Arousal fallback calculation: active/tension - passive/镇静
+                arousal = float(angry + fear + surprise) - float(neutral + sad)
+            
             # Blink Detection via EAR
             ear = 0.3 # Default open
             if 'landmarks' in row and row['landmarks'] is not None:
@@ -153,6 +173,8 @@ class FacialAnalyzer:
                 "frame": frame_id,
                 "AU04": au4,
                 "AU12": au12,
+                "valence": valence,
+                "arousal": arousal,
                 "EAR": ear,
                 "is_blink": 1 if ear < 0.20 else 0
             })

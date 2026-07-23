@@ -40,17 +40,19 @@ class MultimodalIntegrator:
             # Aggregate Visual
             if not vis_slice.empty:
                 vis_metrics = {
-                    "mean_AU04": vis_slice['AU04'].mean(),
-                    "max_AU04": vis_slice['AU04'].max(),
-                    "mean_AU12": vis_slice['AU12'].mean(),
-                    "blink_rate": vis_slice['is_blink'].mean() * 60, # blinks per minute (approx)
+                    "mean_AU04": vis_slice['AU04'].mean() if 'AU04' in vis_slice.columns else 0.0,
+                    "max_AU04": vis_slice['AU04'].max() if 'AU04' in vis_slice.columns else 0.0,
+                    "mean_AU12": vis_slice['AU12'].mean() if 'AU12' in vis_slice.columns else 0.0,
+                    "mean_valence": vis_slice['valence'].mean() if 'valence' in vis_slice.columns else 0.0,
+                    "mean_arousal": vis_slice['arousal'].mean() if 'arousal' in vis_slice.columns else 0.0,
+                    "blink_rate": vis_slice['is_blink'].mean() * 60 if 'is_blink' in vis_slice.columns else 0.0, # blinks per minute (approx)
                     "face_confidence": 1.0 # Placeholder
                 }
             else:
                 vis_metrics = {
                     "mean_AU04": 0.0, "max_AU04": 0.0, 
-                    "mean_AU12": 0.0, "blink_rate": 0.0,
-                    "face_confidence": 0.0
+                    "mean_AU12": 0.0, "mean_valence": 0.0, "mean_arousal": 0.0,
+                    "blink_rate": 0.0, "face_confidence": 0.0
                 }
 
             # --- Speaker Alignment ---
@@ -66,22 +68,22 @@ class MultimodalIntegrator:
                     speaker_id = overlap.sort_values('duration', ascending=False).iloc[0]['speaker']
             
             # --- Discrepancy Reasoning ---
-            # Sentiment vs Emotions (AU12 positive, AU04 negative)
+            # Sentiment (Text) vs Valence (Face/Audio)
             sentiment = row['sentiment_score']
-            facial_pos = vis_metrics['mean_AU12']
-            facial_neg = vis_metrics['mean_AU04']
+            facial_val = vis_metrics['mean_valence']
+            audio_val = row.get('audio_valence', 0.0)
             
             reasoning = "N/A"
             discrepancy_score = 0.0
             
-            # Case: Positive words but negative face
-            if sentiment > 0.3 and facial_neg > 0.4:
-                discrepancy_score = abs(sentiment) + facial_neg
-                reasoning = f"ポジティブな発信内容に対し、眉間の寄せ（AU04={facial_neg:.2f}）が強く検出されました。"
-            # Case: Negative words but positive face (masked emotion?)
-            elif sentiment < -0.3 and facial_pos > 0.4:
-                discrepancy_score = abs(sentiment) + facial_pos
-                reasoning = f"ネガティブな内容の発信ですが、口角の引き上げ（AU12={facial_pos:.2f}）が検出されました。"
+            # Case: Positive statement but negative face or audio (tension/concern)
+            if sentiment > 0.5 and (facial_val < -0.2 or audio_val < -0.2):
+                discrepancy_score = abs(sentiment - facial_val) + abs(sentiment - audio_val)
+                reasoning = f"ポジティブな発信内容に対し、表情（Valence={facial_val:.2f}）または音声トーン（Valence={audio_val:.2f}）にネガティブな兆候が検出されました。"
+            # Case: Negative statement but positive face or audio (calm/relief)
+            elif sentiment < -0.5 and (facial_val > 0.2 or audio_val > 0.2):
+                discrepancy_score = abs(sentiment - facial_val) + abs(sentiment - audio_val)
+                reasoning = f"ネガティブな発信内容に対し、表情（Valence={facial_val:.2f}）または音声トーン（Valence={audio_val:.2f}）にポジティブなシグナルが検出されました。"
                 
             # Create merged row
             merged_row = row.to_dict()

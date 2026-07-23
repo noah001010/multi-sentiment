@@ -40,6 +40,12 @@ def main():
         default="output/facial_features_clean.csv",
         help="表情特徴量CSVの保存パス",
     )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=256,
+        help="Py-Feat分析時のバッチサイズ (RTX 5080用に最適化)",
+    )
     args = parser.parse_args()
 
     crop_dir = Path(args.crop_dir)
@@ -55,10 +61,10 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # 分析の実行
-    logger.info(f"Py-Featによる表情分析を開始します（対象フォルダ: {crop_dir}）...")
+    logger.info(f"Py-Featによる表情分析を開始します（対象フォルダ: {crop_dir}, バッチサイズ: {args.batch_size}）...")
     analyzer = FacialAnalyzer()
     
-    facial_df = analyzer.process_face_crops(str(crop_dir))
+    facial_df = analyzer.process_face_crops(str(crop_dir), batch_size=args.batch_size)
     
     if facial_df.empty:
         logger.error("表情特徴量の抽出結果が空です。")

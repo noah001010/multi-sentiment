@@ -131,8 +131,9 @@ def main():
     df_integ_1min = df_integ.resample('1min').mean(numeric_only=True).reset_index()
 
     # マージ
+    available_vars = [v for v in ['text_score', 'face_emotion_score', 'audio_emotion_score', 'face_arousal_score', 'audio_arousal_score'] if v in df_integ_1min.columns]
     df_merged = pd.merge(df_fin, df_integ_1min, on='datetime', how='inner')
-    df_merged = df_merged.dropna(subset=['return', 'face_emotion_score', 'audio_emotion_score', 'text_score'])
+    df_merged = df_merged.dropna(subset=['return'] + available_vars)
 
     if df_merged.empty:
         logger.error(
@@ -145,8 +146,8 @@ def main():
 
     # 4. OLS回帰分析 (HAC robust standard errors) の実行
     Y = df_merged['return']
-    # 説明変数 (表情感情、音声感情、テキスト感情スコア)
-    X_vars = ['face_emotion_score', 'audio_emotion_score', 'text_score']
+    # 説明変数 (表情の感情価と覚醒度、音声の感情価と覚醒度、テキスト感情スコア)
+    X_vars = available_vars
     X = df_merged[X_vars]
     X_with_const = sm.add_constant(X)
 

@@ -37,6 +37,8 @@ def create_mock_data(output_dir: Path):
             "timestamp": t,
             "AU04": au04,
             "AU12": au12,
+            "valence": au12 - au04,
+            "arousal": au04 + np.random.uniform(-0.1, 0.1),
             "is_blink": 1 if np.random.random() < 0.05 else 0, # まばたき
             "EAR": 0.3
         })
@@ -51,7 +53,10 @@ def create_mock_data(output_dir: Path):
             "jitter": np.random.uniform(0.01, 0.05),
             "shimmer": np.random.uniform(0.1, 0.5),
             "F0_mean": 120.0 + np.random.normal(0, 10),
-            "loudness": 0.5 + np.random.normal(0, 0.1)
+            "loudness": 0.5 + np.random.normal(0, 0.1),
+            "audio_valence": np.random.uniform(-0.5, 0.5),
+            "audio_arousal": np.random.uniform(-0.5, 0.5),
+            "audio_dominance": np.random.uniform(-0.5, 0.5)
         })
     audio_df = pd.DataFrame(audio_data)
     
@@ -83,7 +88,7 @@ def run_integration_test():
     logger.info("このCSVを使用してStreamlitの動作を確認できます。")
     
     # 検証：カラムの存在確認
-    required_cols = ['text', 'sentiment_score', 'mean_AU04', 'jitter']
+    required_cols = ['text', 'sentiment_score', 'mean_valence', 'mean_arousal', 'audio_valence', 'audio_arousal']
     for col in required_cols:
         if col not in final_df.columns:
             logger.error(f"必須カラム {col} が統合データに含まれていません！")

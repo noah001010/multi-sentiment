@@ -74,29 +74,45 @@ def main():
     logger.info(f"文字起こしデータをロードしました。総セグメント数: {len(trans_df)}")
 
     # 2. 特徴量抽出の実行
-    analyzer = AudioAnalyzer()
-    audio_features_list = []
-    
     temp_dir = output_path.parent / "temp_audio_segments"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("発話区間ごとの音声特徴量抽出を開始します...")
-    for idx, row in trans_df.iterrows():
-        start_sample = int(row['start'] * sr)
-        end_sample = int(row['end'] * sr)
-        
+    import concurrent.futures
+    
+    def slice_and_save(idx, start, end):
+        start_sample = int(start * sr)
+        end_sample = int(end * sr)
         if end_sample > start_sample:
             segment_audio = full_audio[start_sample:end_sample]
             temp_wav = temp_dir / f"temp_{idx}.wav"
             sf.write(str(temp_wav), segment_audio, sr)
-            
-            # 特徴量抽出 (OpenSMILE)
-            prosody = analyzer.extract_prosody(str(temp_wav))
+            return idx, str(temp_wav)
+        return idx, None
+
+    logger.info("発話区間のスライシングと一時保存を並列実行中 (CPU並列最適化)...")
+    temp_files = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=24) as executor:
+        futures = {executor.submit(slice_and_save, idx, row['start'], row['end']): idx for idx, row in trans_df.iterrows()}
+        for future in concurrent.futures.as_completed(futures):
+            idx, path = future.result()
+            if path:
+                temp_files[idx] = path
+
+    logger.info("発話区間ごとの音声特徴量抽出 (OpenSMILE & Wav2Vec2 GPU推論) を開始します...")
+    analyzer = AudioAnalyzer()
+    audio_features_list = []
+    
+    # GPUリソースとファイルの衝突を避けるため、推論はメインスレッドで順次実行
+    for idx in sorted(temp_files.keys()):
+        temp_wav_path = temp_files[idx]
+        try:
+            prosody = analyzer.extract_prosody(temp_wav_path)
             prosody['sentence_id'] = idx
             audio_features_list.append(prosody)
-            
-            # 一時ファイル削除
-            temp_wav.unlink(missing_ok=True)
+        except Exception as e:
+            logger.error(f"Error processing segment {idx}: {e}")
+        finally:
+            Path(temp_wav_path).unlink(missing_ok=True)
 
     # クリーニング
     if temp_dir.exists():

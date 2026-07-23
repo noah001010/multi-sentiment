@@ -35,62 +35,39 @@ logging.basicConfig(
 logger = logging.getLogger("Step7-Integration")
 
 
-def zscore(series: pd.Series) -> pd.Series:
-    """NaN を無視して z-score 正規化する。std == 0 の場合は 0 を返す。"""
-    mu = series.mean()
-    sigma = series.std()
-    if sigma == 0 or pd.isna(sigma):
-        return pd.Series(np.zeros(len(series)), index=series.index)
-    return (series - mu) / sigma
-
-
-def compute_audio_emotion_score(audio_df: pd.DataFrame) -> pd.Series:
+def extract_audio_dimension(audio_df: pd.DataFrame, col_name: str) -> pd.Series:
     """
-    audio_emotion_score = z(loudness) + z(F0_mean) - z(jitter) - z(shimmer)
+    Extract a specific emotion dimension (valence, arousal, etc.) from audio features.
     """
     df = audio_df.copy()
-    required = ["F0_mean", "jitter", "shimmer", "loudness"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        logger.warning(f"音声特徴に一部の必要な列がありません: {missing}. デフォルト値 0 を使用します。")
-        for col in missing:
-            df[col] = 0.0
-
-    df["z_loudness"] = zscore(df["loudness"])
-    df["z_F0_mean"] = zscore(df["F0_mean"])
-    df["z_jitter"] = zscore(df["jitter"])
-    df["z_shimmer"] = zscore(df["shimmer"])
-
-    df["audio_emotion_score"] = (
-        df["z_loudness"] + df["z_F0_mean"] - df["z_jitter"] - df["z_shimmer"]
-    )
-    return df.set_index("sentence_id")["audio_emotion_score"]
+    if col_name not in df.columns:
+        logger.warning(f"音声特徴に列 '{col_name}' が見つかりません。デフォルト値 0.0 を使用します。")
+        df[col_name] = 0.0
+    return df.set_index("sentence_id")[col_name]
 
 
-def compute_face_emotion_score(
+def compute_face_metric(
     face_df: pd.DataFrame,
     starts: pd.Series,
     ends: pd.Series,
+    col_name: str,
     fps: float = 30.0,
 ) -> pd.Series:
     """
-    face_emotion_score = mean(AU12 - AU04) over frames in [start, end].
+    Compute mean of a facial metric (valence, arousal, etc.) over frames in [start, end].
     """
     df = face_df.copy()
-    required = ["frame", "AU04", "AU12"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        logger.warning(f"表情特徴に必要な列がありません: {missing}. 表情感情スコアは 0 になります。")
+    if col_name not in df.columns:
+        logger.warning(f"表情特徴に列 '{col_name}' が見つかりません。表情感情スコアは 0 になります。")
         return pd.Series(np.zeros(len(starts)), index=starts.index)
 
-    df = df.dropna(subset=["AU04", "AU12"])
+    df = df.dropna(subset=[col_name])
     df["timestamp"] = df["frame"] / fps
-    df["frame_score"] = df["AU12"] - df["AU04"]
 
     scores = []
     for start, end in zip(starts, ends):
         mask = (df["timestamp"] >= start) & (df["timestamp"] <= end)
-        subset = df.loc[mask, "frame_score"]
+        subset = df.loc[mask, col_name]
         scores.append(float(subset.mean()) if not subset.empty else float("nan"))
 
     return pd.Series(scores, index=starts.index)
@@ -114,7 +91,7 @@ def main():
         "--audio_path",
         type=str,
         default="output/audio_features.csv",
-        help="Step 6 で出力した音声特徴量CSV의パス",
+        help="Step 6 で出力した音声特徴量CSVのパス",
     )
     parser.add_argument(
         "--diarization_path",
@@ -153,11 +130,11 @@ def main():
     logger.info("各種特徴量ファイルをロード中...")
     text_df = pd.read_csv(text_path)
     
-    facial_df = pd.read_csv(facial_path) if facial_path.exists() else pd.DataFrame(columns=["frame", "AU04", "AU12", "is_blink"])
+    facial_df = pd.read_csv(facial_path) if facial_path.exists() else pd.DataFrame(columns=["frame", "AU04", "AU12", "valence", "arousal", "is_blink"])
     if not facial_path.exists():
         logger.warning(f"表情ファイル {facial_path} が存在しないため、ダミー値で補完します。")
         
-    audio_df = pd.read_csv(audio_path) if audio_path.exists() else pd.DataFrame(columns=["sentence_id", "jitter", "shimmer", "F0_mean", "loudness"])
+    audio_df = pd.read_csv(audio_path) if audio_path.exists() else pd.DataFrame(columns=["sentence_id", "audio_valence", "audio_arousal", "audio_dominance", "jitter", "shimmer", "F0_mean", "loudness"])
     if not audio_path.exists():
         logger.warning(f"音声ファイル {audio_path} が存在しないため、ダミー値で補完します。")
 
@@ -186,24 +163,37 @@ def main():
     # 2-1. text_score (BERT値)
     final_df["text_score"] = final_df["sentiment_score"]
 
-    # 2-2. audio_emotion_score
+    # 2-2. audio_valence & audio_arousal
     if not audio_df.empty:
-        audio_score_series = compute_audio_emotion_score(audio_df)
-        final_df["audio_emotion_score"] = final_df["sentence_id"].map(audio_score_series)
+        audio_val_series = extract_audio_dimension(audio_df, "audio_valence")
+        audio_aro_series = extract_audio_dimension(audio_df, "audio_arousal")
+        final_df["audio_emotion_score"] = final_df["sentence_id"].map(audio_val_series)
+        final_df["audio_arousal_score"] = final_df["sentence_id"].map(audio_aro_series)
     else:
         final_df["audio_emotion_score"] = 0.0
+        final_df["audio_arousal_score"] = 0.0
     final_df["audio_emotion_score"] = final_df["audio_emotion_score"].fillna(0.0)
+    final_df["audio_arousal_score"] = final_df["audio_arousal_score"].fillna(0.0)
 
-    # 2-3. face_emotion_score
+    # 2-3. face_valence & face_arousal
     if not facial_df.empty:
-        final_df["face_emotion_score"] = compute_face_emotion_score(
+        final_df["face_emotion_score"] = compute_face_metric(
             facial_df,
             starts=final_df["start"],
-            ends=final_df["end"]
+            ends=final_df["end"],
+            col_name="valence"
+        )
+        final_df["face_arousal_score"] = compute_face_metric(
+            facial_df,
+            starts=final_df["start"],
+            ends=final_df["end"],
+            col_name="arousal"
         )
     else:
         final_df["face_emotion_score"] = 0.0
+        final_df["face_arousal_score"] = 0.0
     final_df["face_emotion_score"] = final_df["face_emotion_score"].fillna(0.0)
+    final_df["face_arousal_score"] = final_df["face_arousal_score"].fillna(0.0)
 
     # 2-4. is_governor
     if "speaker" in final_df.columns:
@@ -211,7 +201,7 @@ def main():
     else:
         final_df["is_governor"] = False
 
-    # 2-5. 乖離度 (Discrepancy)
+    # 2-5. 乖離度 (Discrepancy) - Valence同士の絶対差を計算
     t = final_df["text_score"]
     a = final_df["audio_emotion_score"]
     f = final_df["face_emotion_score"]
@@ -225,13 +215,13 @@ def main():
 
     # 統計サマリーの表示
     new_cols = [
-        "text_score", "audio_emotion_score", "face_emotion_score",
+        "text_score", "audio_emotion_score", "audio_arousal_score",
+        "face_emotion_score", "face_arousal_score",
         "is_governor", "discrepancy_score", "discrepancy_score_3"
     ]
     print("\n=== 統合感情スコアサマリー ===")
     print(final_df[new_cols].describe().round(4))
     print(f"\n総裁 (governor) の発話行数: {final_df['is_governor'].sum()} / 全発話数 {len(final_df)}")
-
 
 if __name__ == "__main__":
     main()
