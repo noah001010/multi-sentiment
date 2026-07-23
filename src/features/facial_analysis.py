@@ -30,6 +30,17 @@ if 'lib2to3' not in sys.modules:
     sys.modules['lib2to3'] = lib2to3
     sys.modules['lib2to3.pytree'] = lib2to3.pytree
 
+# Stub torchcodec to prevent import failure due to ffmpeg/torchcodec compiled binary mismatch
+if 'torchcodec' not in sys.modules:
+    class MockVideoDecoder:
+        def __init__(self, *args, **kwargs):
+            pass
+    torchcodec = types.ModuleType('torchcodec')
+    torchcodec.decoders = types.ModuleType('torchcodec.decoders')
+    torchcodec.decoders.VideoDecoder = MockVideoDecoder
+    sys.modules['torchcodec'] = torchcodec
+    sys.modules['torchcodec.decoders'] = torchcodec.decoders
+
 import logging
 import cv2
 import pandas as pd
