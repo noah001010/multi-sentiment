@@ -4,30 +4,49 @@ import numpy as np
 import json
 import os
 import sys
-import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from pathlib import Path
-import streamlit.components.v1 as components
 import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import variance_inflation_factor
+from pathlib import Path
 
 # --- ページ設定 ---
-st.set_page_config(page_title="Multimodal Sentiment & Market Dashboard", layout="wide", page_icon="📈")
+st.set_page_config(
+    page_title="BOJ Multimodal Sentiment Dashboard", 
+    layout="wide", 
+    page_icon="🤖"
+)
 
-# ダークモード用のカスタムCSS
+# ガラスモーフィズムとダークネオンスタイルの適用
 st.markdown("""
 <style>
-    body { font-family: 'Inter', sans-serif; }
-    .stButton>button { width: 100%; font-weight: bold; background-color: #ff4b4b; color: white; border: none; }
-    .stButton>button:hover { background-color: #ff3333; color: white; }
+    /* 全体背景 */
+    .stApp {
+        background-color: #0b0c10;
+        color: #c5c6c7;
+    }
+    
+    /* サイドバー */
+    [data-testid="stSidebar"] {
+        background-color: #1f2833;
+        border-right: 1px solid #ff4b4b;
+    }
+    
+    /* 見出しとテキスト */
+    h1, h2, h3 {
+        color: #66fcf1 !important;
+        font-family: 'Outfit', 'Inter', sans-serif;
+        font-weight: 700;
+    }
+    
+    /* カード */
     .metric-card {
-        background-color: #1e2130;
+        background: rgba(31, 40, 51, 0.45);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(102, 252, 241, 0.2);
         padding: 20px;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        border-radius: 12px;
         text-align: center;
-        border-top: 4px solid #ff4b4b;
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -47,89 +66,27 @@ def load_and_filter_forex_data(csv_path: str, conference_start_time_str: str) ->
 
 # --- サイドバー ---
 with st.sidebar:
-    st.header("⚙️ Configuration")
-    video_path = st.text_input("動画のパス (.mp4)", value="data/boj_conference.mp4")
-    integrated_path = st.text_input("統合結果 CSVのパス", value="output/integrated_results.csv")
-    forex_path = st.text_input("為替ヒストリカル CSVのパス", value="data/DAT_ASCII_USDJPY_M1_2023.csv")
-    start_time_str = st.text_input("会見開始時刻", value="2023-06-16 15:30:00")
-    governor_only = st.checkbox("総裁（is_governor）の発話のみに絞る", value=True)
+    st.header("⚡ System Config")
+    video_path = st.text_input("動画ファイルパス (.mp4)", value="data/boj_conference.mp4")
+    integrated_path = st.text_input("統合結果 CSVパス", value="output/integrated_results.csv")
+    forex_path = st.text_input("為替ヒストリカル CSVパス", value="data/DAT_ASCII_USDJPY_M1_2023.csv")
+    start_time_str = st.text_input("会見開始基準時刻 (JST)", value="2023-06-16 15:30:00")
+    governor_only = st.checkbox("回帰分析は総裁発話のみに絞る", value=True)
+    st.info("💡 JST基準の開始時刻を入力してください。為替データ(EST)は自動で時差補正されます。")
 
 # データ存在チェック
 if not os.path.exists(integrated_path):
-    st.warning(f"⚠️ `{integrated_path}` が見つかりません。先にStep 7のデータ統合を完了してください。")
+    st.warning(f"⚠️ `{integrated_path}` が見つかりません。先にデータ統合を完了してください。")
     st.stop()
 if not os.path.exists(forex_path):
     st.warning(f"⚠️ `{forex_path}` が見つかりません。パスを確認してください。")
     st.stop()
 
-# --- データロード & 前処理 ---
+# --- データの読み込み ---
 df_integ = pd.read_csv(integrated_path)
 df_fin = load_and_filter_forex_data(forex_path, start_time_str)
 
-# 絞り込み
-if governor_only and "is_governor" in df_integ.columns:
-    df_integ = df_integ[df_integ["is_governor"] == True].copy()
-
-# 時間アライメント (秒 -> datetime -> 1分足リサンプル)
-conference_start_time = pd.to_datetime(start_time_str)
-df_integ['datetime'] = conference_start_time + pd.to_timedelta(df_integ['start'], unit='s')
-df_integ_time = df_integ.set_index('datetime')
-df_integ_1min = df_integ_time.resample('1min').mean(numeric_only=True).reset_index()
-
-# 為替と感情のマージ
-available_vars = [v for v in ['text_score', 'face_emotion_score', 'audio_emotion_score', 'face_arousal_score', 'audio_arousal_score'] if v in df_integ_1min.columns]
-df_merged = pd.merge(df_fin, df_integ_1min, on='datetime', how='inner')
-df_merged = df_merged.dropna(subset=['return'] + available_vars)
-
-# --- OLS回帰計算 ---
-Y = df_merged['return']
-X = df_merged[available_vars]
-X_with_const = sm.add_constant(X)
-regression_model = sm.OLS(Y, X_with_const)
-regression_results = regression_model.fit(cov_type='HAC', cov_kwds={'maxlags': 1})
-
-# VIF
-vif_data = pd.DataFrame()
-vif_data["Variable"] = X_with_const.columns
-vif_data["VIF"] = [variance_inflation_factor(X_with_const.values, i) for i in range(X_with_const.shape[1])]
-
-# --- メイン UI ---
-st.title("📊 日銀総裁会見 マルチモーダル感情分析ダッシュボード")
-st.markdown("学術的な Valence（感情価）と Arousal（緊張度）モデルを使用した、意思決定プロセスと為替市場のリアルタイムアライメントシステム")
-
-# 1. 感情 & 為替チャート（二重軸）
-st.subheader("🕒 感情スコアと為替価格の推移 (時系列)")
-
-fig = make_subplots(specs=[[{"secondary_y": True}]])
-# 感情価 (Valence)
-if 'text_score' in df_merged.columns:
-    fig.add_trace(go.Scatter(x=df_merged['datetime'], y=df_merged['text_score'], name="Text Valence", line=dict(color="#00CC96", width=2)), secondary_y=False)
-if 'face_emotion_score' in df_merged.columns:
-    fig.add_trace(go.Scatter(x=df_merged['datetime'], y=df_merged['face_emotion_score'], name="Face Valence (Smile)", line=dict(color="#EF553B", width=2)), secondary_y=False)
-if 'face_arousal_score' in df_merged.columns:
-    fig.add_trace(go.Scatter(x=df_merged['datetime'], y=df_merged['face_arousal_score'], name="Face Arousal (Tension)", line=dict(color="#AB63FA", width=2, dash='dash')), secondary_y=False)
-if 'audio_emotion_score' in df_merged.columns:
-    fig.add_trace(go.Scatter(x=df_merged['datetime'], y=df_merged['audio_emotion_score'], name="Audio Valence", line=dict(color="#636EFA", width=2)), secondary_y=False)
-
-# 為替 Close価格
-fig.add_trace(go.Scatter(x=df_merged['datetime'], y=df_merged['close'], name="USD/JPY Close", line=dict(color="#FFD700", width=3)), secondary_y=True)
-
-fig.update_layout(template="plotly_dark", hovermode="x unified", height=450, margin=dict(l=0, r=0, t=30, b=0))
-fig.update_yaxes(title_text="感情スコア (Valence / Arousal)", secondary_y=False)
-fig.update_yaxes(title_text="為替レート (USD/JPY)", secondary_y=True)
-st.plotly_chart(fig, use_container_width=True)
-
-# 2. 動画プレイヤー & 乖離点 (Discrepancy)
-st.markdown("---")
-st.subheader("⚠️ 感情乖離点の分析 & 動画シーク連動 (Discrepancy Video Player)")
-st.markdown("テキスト感情と非言語感情（表情・音声）の絶対差が最大値を示すセグメントを自動検知しています。カードをクリックすると動画がそのシーンにジャンプします。")
-
-# 乖離トップ5
-df_integ_copy = df_integ.copy()
-df_integ_copy['discrepancy_score'] = df_integ_copy['discrepancy_score'].fillna(0.0)
-top_disc = df_integ_copy.sort_values('discrepancy_score', ascending=False).head(5)
-
-# 静的フォルダへの動画のコピー・シンボリックリンク確認
+# 静的フォルダへの動画のコピー確認
 static_dir = Path("static")
 static_dir.mkdir(exist_ok=True)
 video_basename = os.path.basename(video_path)
@@ -141,82 +98,352 @@ if not target_static.exists() and os.path.exists(video_path):
     except Exception as e:
         st.error(f"動画をstaticフォルダにロードできませんでした: {e}")
 
-video_url = f"/app/static/{video_basename}"
+video_url = f"/static/{video_basename}"
 
-# 乖離データリストの作成
-discrepancy_list = []
-for idx, row in top_disc.iterrows():
-    discrepancy_list.append({
-        "timestamp": float(row["start"]),
-        "time_str": str(pd.Timedelta(seconds=int(row["start"]))),
-        "score": round(float(row["discrepancy_score"]), 2),
-        "text": str(row["text"]),
-        "type": "非言語情報の感情乖離 (Text vs Nonverbal)"
+# 時間アライメント処理 (回帰分析用)
+conference_start_time = pd.to_datetime(start_time_str)
+df_integ['datetime'] = conference_start_time + pd.to_timedelta(df_integ['start'], unit='s')
+df_integ_time = df_integ.set_index('datetime')
+df_integ_1min = df_integ_time.resample('1min').mean(numeric_only=True).reset_index()
+
+available_vars = [v for v in ['text_score', 'face_emotion_score', 'audio_emotion_score', 'face_arousal_score', 'audio_arousal_score'] if v in df_integ_1min.columns]
+df_merged = pd.merge(df_fin, df_integ_1min, on='datetime', how='inner')
+df_merged = df_merged.dropna(subset=['return'] + available_vars)
+
+# 回帰モデル OLS (Newey-West)
+Y = df_merged['return']
+X = df_merged[available_vars]
+X_with_const = sm.add_constant(X)
+regression_model = sm.OLS(Y, X_with_const)
+regression_results = regression_model.fit(cov_type='HAC', cov_kwds={'maxlags': 1})
+
+# VIF
+vif_data = pd.DataFrame()
+vif_data["Variable"] = X_with_const.columns
+vif_data["VIF"] = [variance_inflation_factor(X_with_const.values, i) for i in range(X_with_const.shape[1])]
+
+# JS/HTML コンポーネント用のデータ準備
+# 1. 1分足の感情&為替データ
+chart_data_list = []
+for _, row in df_merged.iterrows():
+    minutes = (row["datetime"] - conference_start_time).total_seconds() / 60.0
+    chart_data_list.append({
+        "m": round(minutes, 2),
+        "close": round(float(row["close"]), 4),
+        "text": round(float(row["text_score"]), 4) if 'text_score' in row else 0.0,
+        "face_val": round(float(row["face_emotion_score"]), 4) if 'face_emotion_score' in row else 0.0,
+        "face_aro": round(float(row["face_arousal_score"]), 4) if 'face_arousal_score' in row else 0.0,
+        "audio_val": round(float(row["audio_emotion_score"]), 4) if 'audio_emotion_score' in row else 0.0,
+        "audio_aro": round(float(row["audio_arousal_score"]), 4) if 'audio_arousal_score' in row else 0.0,
     })
 
-data_json = json.dumps(discrepancy_list)
+# 2. 全セグメントの文字起こしデータ
+transcript_list = []
+for idx, row in df_integ.iterrows():
+    transcript_list.append({
+        "id": int(idx),
+        "start": float(row["start"]),
+        "end": float(row["end"]),
+        "text": str(row["text"]),
+        "speaker": str(row.get("speaker", "UNKNOWN")),
+        "is_gov": bool(row.get("is_governor", False))
+    })
 
+chart_json = json.dumps(chart_data_list)
+transcript_json = json.dumps(transcript_list)
+
+# --- メインダッシュボード ---
+st.title("🤖 BOJ Governor Multimodal Real-Time Aligner")
+st.markdown("オープンキャンパス実演用：日銀総裁の発話・表情・声のトーンと、為替市場のリアルタイム同期可視化デモシステム")
+
+# リアルタイム同期用 HTML/CSS/JS コンポーネント
 custom_html = f"""
 <!DOCTYPE html>
 <html>
 <head>
+<meta charset="utf-8">
+<!-- Tailwind CSS CDN -->
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- Chart.js CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-    body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #fff; background-color: #0e1117; margin: 0; padding: 0; }}
-    .container {{ display: flex; gap: 20px; }}
-    .video-section {{ flex: 2; }}
-    .list-section {{ flex: 1; height: 380px; overflow-y: auto; background-color: #1e2130; border-radius: 8px; padding: 15px; border: 1px solid #3e4451; }}
-    video {{ width: 100%; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); outline: none; }}
-    .discrepancy-card {{ background-color: #2d1a1a; border-left: 4px solid #ff4b4b; padding: 10px; margin-bottom: 10px; border-radius: 4px; cursor: pointer; transition: 0.2s; }}
-    .discrepancy-card:hover {{ background-color: #3d2222; transform: translateX(5px); }}
-    .time-badge {{ background-color: #ff4b4b; padding: 3px 6px; border-radius: 4px; font-size: 12px; font-weight: bold; }}
-    .score {{ float: right; color: #ffdd57; font-weight: bold; }}
+    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap');
+    body {{
+        font-family: 'Outfit', sans-serif;
+        background-color: #0b0c10;
+        color: #c5c6c7;
+    }}
+    .glow-border {{
+        box-shadow: 0 0 15px rgba(102, 252, 241, 0.3);
+        border: 1px solid rgba(102, 252, 241, 0.4);
+    }}
+    .active-glow {{
+        background: rgba(102, 252, 241, 0.15) !important;
+        border: 2px solid #66fcf1 !important;
+        box-shadow: 0 0 20px rgba(102, 252, 241, 0.5);
+    }}
+    /* スクロールバーのカスタマイズ */
+    ::-webkit-scrollbar {{
+        width: 6px;
+    }}
+    ::-webkit-scrollbar-track {{
+        background: #1f2833;
+    }}
+    ::-webkit-scrollbar-thumb {{
+        background: #45f248;
+        border-radius: 3px;
+    }}
+    ::-webkit-scrollbar-thumb:hover {{
+        background: #66fcf1;
+    }}
 </style>
 </head>
-<body>
-<div class="container">
-    <div class="video-section">
-        <video id="conference_video" controls>
-            <source src="{video_url}" type="video/mp4">
-            Your browser does not support the video tag.
-        </video>
+<body class="p-3">
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    <!-- 左・中カラム: 動画プレイヤー & 同期チャート -->
+    <div class="lg:col-span-2 space-y-4">
+        <!-- 動画プレイヤー -->
+        <div class="bg-[#1f2833] p-3 rounded-xl glow-border">
+            <video id="boj_video" class="w-full rounded-lg shadow-2xl" controls>
+                <source src="{video_url}" type="video/mp4">
+            </video>
+        </div>
+        
+        <!-- 同期ラインチャート -->
+        <div class="bg-[#1f2833] p-4 rounded-xl glow-border">
+            <h3 class="text-[#66fcf1] font-bold text-lg mb-2 flex justify-between items-center">
+                📊 マルチモーダル時系列アライメント
+                <span id="current_time_display" class="text-sm bg-[#0b0c10] px-3 py-1 rounded text-white border border-gray-700">Elapsed: 00:00</span>
+            </h3>
+            <div style="position: relative; height: 260px; width: 100%;">
+                <canvas id="sync_chart"></canvas>
+            </div>
+        </div>
     </div>
-    <div class="list-section" id="list_container">
-        <h3 style="margin-top: 0; border-bottom: 1px solid #3e4451; padding-bottom: 10px;">⚠️ 乖離シーン一覧</h3>
+    
+    <!-- 右カラム: リアルタイムスクロール文字起こし -->
+    <div class="bg-[#1f2833] p-4 rounded-xl glow-border flex flex-col h-[755px]">
+        <h3 class="text-[#66fcf1] font-bold text-lg mb-3 pb-2 border-b border-gray-700">💬 発話セグメント (Transcript)</h3>
+        <p class="text-xs text-gray-400 mb-3">カードをクリックすると、動画の該当発話シーンへ直接ジャンプします。</p>
+        <div id="transcript_container" class="flex-1 overflow-y-auto space-y-3 pr-2">
+            <!-- JSで動的生成 -->
+        </div>
     </div>
 </div>
-<script>
-    const discrepancyData = {data_json};
-    const video = document.getElementById("conference_video");
-    const listContainer = document.getElementById("list_container");
 
-    function jumpToTime(seconds) {{
-        video.currentTime = seconds;
-        video.play();
+<script>
+    const chartData = {chart_json};
+    const transcriptData = {transcript_json};
+
+    const video = document.getElementById("boj_video");
+    const transcriptContainer = document.getElementById("transcript_container");
+    const timeDisplay = document.getElementById("current_time_display");
+
+    // 1. チャートの初期化 (Chart.js)
+    const labels = chartData.map(d => d.m);
+    const textScores = chartData.map(d => d.text);
+    const faceValScores = chartData.map(d => d.face_val);
+    const faceAroScores = chartData.map(d => d.face_aro);
+    const audioValScores = chartData.map(d => d.audio_val);
+    const fxPrices = chartData.map(d => d.close);
+
+    // カスタム垂直線描画プラグイン
+    const verticalLinePlugin = {{
+        id: 'verticalLine',
+        afterDraw: (chart) => {{
+            if (chart.config.options.plugins.verticalLine && chart.config.options.plugins.verticalLine.xValue !== undefined) {{
+                const xValue = chart.config.options.plugins.verticalLine.xValue;
+                const xAxis = chart.scales.x;
+                const yAxis = chart.scales.y;
+                const xPixel = xAxis.getPixelForValue(xValue);
+                
+                const ctx = chart.ctx;
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(xPixel, yAxis.top);
+                ctx.lineTo(xPixel, yAxis.bottom);
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = '#66fcf1'; // ネオンシアン
+                ctx.shadowColor = '#66fcf1';
+                ctx.shadowBlur = 8;
+                ctx.stroke();
+                ctx.restore();
+            }}
+        }}
+    }};
+    Chart.register(verticalLinePlugin);
+
+    const ctx = document.getElementById('sync_chart').getContext('2d');
+    const chart = new Chart(ctx, {{
+        type: 'line',
+        data: {{
+            labels: labels,
+            datasets: [
+                {{
+                    label: 'Text Valence (言語感情)',
+                    data: textScores,
+                    borderColor: '#2ecc71',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    yAxisID: 'y_emotion'
+                }},
+                {{
+                    label: 'Face Valence (表情ポジネガ)',
+                    data: faceValScores,
+                    borderColor: '#e74c3c',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    yAxisID: 'y_emotion'
+                }},
+                {{
+                    label: 'Face Arousal (表情緊張度)',
+                    data: faceAroScores,
+                    borderColor: '#9b59b6',
+                    borderWidth: 2,
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    yAxisID: 'y_emotion'
+                }},
+                {{
+                    label: 'Audio Valence (音声感情)',
+                    data: audioValScores,
+                    borderColor: '#3498db',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    yAxisID: 'y_emotion'
+                }},
+                {{
+                    label: 'USD/JPY 為替 Close',
+                    data: fxPrices,
+                    borderColor: '#f1c40f',
+                    borderWidth: 3,
+                    pointRadius: 0,
+                    yAxisID: 'y_forex'
+                }}
+            ]
+        }},
+        options: {{
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {{
+                x: {{
+                    title: {{
+                        display: true,
+                        text: '会見開始からの経過時間 (分足)',
+                        color: '#c5c6c7'
+                    }},
+                    grid: {{ color: '#1f2833' }},
+                    ticks: {{ color: '#c5c6c7' }}
+                }},
+                y_emotion: {{
+                    position: 'left',
+                    title: {{ display: true, text: '感情・緊張スコア', color: '#c5c6c7' }},
+                    grid: {{ color: '#1f2833' }},
+                    ticks: {{ color: '#c5c6c7' }},
+                    min: -2,
+                    max: 2
+                }},
+                y_forex: {{
+                    position: 'right',
+                    title: {{ display: true, text: '為替価格 (USD/JPY)', color: '#c5c6c7' }},
+                    grid: {{ drawOnChartArea: false }},
+                    ticks: {{ color: '#c5c6c7' }}
+                }}
+            }},
+            plugins: {{
+                legend: {{
+                    position: 'top',
+                    labels: {{ color: '#c5c6c7', boxWidth: 12, font: {{ size: 10 }} }}
+                }},
+                verticalLine: {{
+                    xValue: 0.0
+                }}
+            }}
+        }}
+    }});
+
+    // 2. 文字起こしリストの動的生成
+    transcriptData.forEach((item, index) => {{
+        const card = document.createElement("div");
+        card.id = `card-${{index}}`;
+        card.className = `p-3 rounded-lg cursor-pointer transition duration-300 border ${{
+            item.is_gov 
+                ? "bg-[#0b0c10] border-cyan-900 hover:bg-cyan-950" 
+                : "bg-gray-900 border-gray-800 hover:bg-gray-800"
+        }}`;
+        
+        card.onclick = () => {{
+            video.currentTime = item.start;
+            video.play();
+        }};
+
+        card.innerHTML = `
+            <div class="flex justify-between items-center mb-1 text-xs">
+                <span class="${{item.is_gov ? "text-[#66fcf1] font-bold" : "text-gray-400"}}">
+                    👤 ${{item.is_gov ? "総裁 (Governor)" : "記者/その他"}}
+                </span>
+                <span class="text-gray-500 font-mono">🕒 ${{formatTime(item.start)}}</span>
+            </div>
+            <p class="text-sm leading-relaxed">${{item.text}}</p>
+        `;
+        transcriptContainer.appendChild(card);
+    }});
+
+    // 3. 時間フォーマット
+    function formatTime(seconds) {{
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${{String(mins).padStart(2, '0')}}:${{String(secs).padStart(2, '0')}}`;
     }}
 
-    discrepancyData.forEach((item) => {{
-        const card = document.createElement("div");
-        card.className = "discrepancy-card";
-        card.onclick = () => jumpToTime(item.timestamp);
-        card.innerHTML = `
-            <div>
-                <span class="time-badge">🕒 ${{item.time_str}}</span>
-                <span class="score">乖離度: ${{item.score}}</span>
-            </div>
-            <div style="margin-top: 8px; font-size: 14px; font-weight: bold; color: #ff9999;">${{item.type}}</div>
-            <div style="margin-top: 5px; font-size: 13px; color: #ccc; font-style: italic;">"${{item.text}}"</div>
-        `;
-        listContainer.appendChild(card);
+    // 4. 動画再生とアライメント・シークの同期
+    video.addEventListener("timeupdate", () => {{
+        const curTime = video.currentTime;
+        timeDisplay.innerText = "Elapsed: " + formatTime(curTime);
+
+        // チャートのシークバー移動
+        chart.config.options.plugins.verticalLine.xValue = curTime / 60.0;
+        chart.update('none');
+
+        // 文字起こしのハイライト & 自動スクロール
+        let activeIdx = -1;
+        for (let i = 0; i < transcriptData.length; i++) {{
+            if (curTime >= transcriptData[i].start && curTime <= transcriptData[i].end) {{
+                activeIdx = i;
+                break;
+            }}
+        }}
+
+        if (activeIdx !== -1) {{
+            // 以前のハイライトを削除
+            document.querySelectorAll('.active-glow').forEach(el => el.classList.remove('active-glow'));
+            
+            const activeCard = document.getElementById(`card-${{activeIdx}}`);
+            if (activeCard) {{
+                activeCard.classList.add('active-glow');
+                
+                // スクロールコンテナ内で中央にスクロール
+                const containerHeight = transcriptContainer.clientHeight;
+                const cardTop = activeCard.offsetTop;
+                const cardHeight = activeCard.clientHeight;
+                transcriptContainer.scrollTo({{
+                    top: cardTop - (containerHeight / 2) + (cardHeight / 2),
+                    behavior: 'smooth'
+                }});
+            }}
+        }}
     }});
 </script>
 </body>
 </html>
 """
-components.html(custom_html, height=400, scrolling=False)
+# リアルタイムビューアーの描画 (高さ790px)
+components.html(custom_html, height=790, scrolling=False)
 
-# 3. OLS回帰分析結果
+# 4. 回帰統計結果の表示
 st.markdown("---")
-st.subheader("📈 回帰分析結果サマリー (OLS Regression with Newey-West HAC)")
+st.subheader("📈 感情指標と為替リターンのOLS回帰分析 (HAC補正)")
 
 col1, col2 = st.columns([1, 1])
 
@@ -270,9 +497,9 @@ with col2:
             symmetric=False,
             array=forest_df["Upper"] - forest_df["Coef"],
             arrayminus=forest_df["Coef"] - forest_df["Lower"],
-            color="#ff4b4b"
+            color="#66fcf1"
         ),
-        marker=dict(size=12, color="#ff4b4b"),
+        marker=dict(size=12, color="#66fcf1"),
         name="Coefficient"
     ))
     fig_forest.add_shape(type="line", x0=0, y0=-0.5, x1=0, y1=len(forest_df)-0.5, line=dict(color="white", width=1, dash="dash"))
