@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 from pathlib import Path
+import streamlit.components.v1 as components
 
 # --- ページ設定 ---
 st.set_page_config(
@@ -28,25 +29,25 @@ st.markdown("""
     /* サイドバー */
     [data-testid="stSidebar"] {
         background-color: #1f2833;
-        border-right: 1px solid #ff4b4b;
+        border-right: 1px solid #bd00ff;
     }
     
     /* 見出しとテキスト */
     h1, h2, h3 {
-        color: #66fcf1 !important;
+        color: #bd00ff !important;
         font-family: 'Outfit', 'Inter', sans-serif;
         font-weight: 700;
+        text-shadow: 0 0 10px rgba(189, 0, 255, 0.3);
     }
     
     /* カード */
     .metric-card {
         background: rgba(31, 40, 51, 0.45);
         backdrop-filter: blur(10px);
-        border: 1px solid rgba(102, 252, 241, 0.2);
+        border: 1px solid rgba(189, 0, 255, 0.2);
         padding: 20px;
         border-radius: 12px;
         text-align: center;
-        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -174,13 +175,13 @@ custom_html = f"""
         color: #c5c6c7;
     }}
     .glow-border {{
-        box-shadow: 0 0 15px rgba(102, 252, 241, 0.3);
-        border: 1px solid rgba(102, 252, 241, 0.4);
+        box-shadow: 0 0 15px rgba(189, 0, 255, 0.3);
+        border: 1px solid rgba(189, 0, 255, 0.4);
     }}
     .active-glow {{
-        background: rgba(102, 252, 241, 0.15) !important;
-        border: 2px solid #66fcf1 !important;
-        box-shadow: 0 0 20px rgba(102, 252, 241, 0.5);
+        background: rgba(189, 0, 255, 0.15) !important;
+        border: 2px solid #bd00ff !important;
+        box-shadow: 0 0 20px rgba(189, 0, 255, 0.5);
     }}
     /* スクロールバーのカスタマイズ */
     ::-webkit-scrollbar {{
@@ -194,7 +195,7 @@ custom_html = f"""
         border-radius: 3px;
     }}
     ::-webkit-scrollbar-thumb:hover {{
-        background: #66fcf1;
+        background: #bd00ff;
     }}
 </style>
 </head>
@@ -212,7 +213,7 @@ custom_html = f"""
         
         <!-- 同期ラインチャート -->
         <div class="bg-[#1f2833] p-4 rounded-xl glow-border">
-            <h3 class="text-[#66fcf1] font-bold text-lg mb-2 flex justify-between items-center">
+            <h3 class="text-[#bd00ff] font-bold text-lg mb-2 flex justify-between items-center">
                 📊 マルチモーダル時系列アライメント
                 <span id="current_time_display" class="text-sm bg-[#0b0c10] px-3 py-1 rounded text-white border border-gray-700">Elapsed: 00:00</span>
             </h3>
@@ -224,7 +225,7 @@ custom_html = f"""
     
     <!-- 右カラム: リアルタイムスクロール文字起こし -->
     <div class="bg-[#1f2833] p-4 rounded-xl glow-border flex flex-col h-[755px]">
-        <h3 class="text-[#66fcf1] font-bold text-lg mb-3 pb-2 border-b border-gray-700">💬 発話セグメント (Transcript)</h3>
+        <h3 class="text-[#bd00ff] font-bold text-lg mb-3 pb-2 border-b border-gray-700">💬 発話セグメント (Transcript)</h3>
         <p class="text-xs text-gray-400 mb-3">カードをクリックすると、動画の該当発話シーンへ直接ジャンプします。</p>
         <div id="transcript_container" class="flex-1 overflow-y-auto space-y-3 pr-2">
             <!-- JSで動的生成 -->
@@ -264,8 +265,8 @@ custom_html = f"""
                 ctx.moveTo(xPixel, yAxis.top);
                 ctx.lineTo(xPixel, yAxis.bottom);
                 ctx.lineWidth = 3;
-                ctx.strokeStyle = '#66fcf1'; // ネオンシアン
-                ctx.shadowColor = '#66fcf1';
+                ctx.strokeStyle = '#bd00ff'; // ネオンパープル
+                ctx.shadowColor = '#bd00ff';
                 ctx.shadowBlur = 8;
                 ctx.stroke();
                 ctx.restore();
@@ -380,7 +381,7 @@ custom_html = f"""
 
         card.innerHTML = `
             <div class="flex justify-between items-center mb-1 text-xs">
-                <span class="${{item.is_gov ? "text-[#66fcf1] font-bold" : "text-gray-400"}}">
+                <span class="${{item.is_gov ? "text-[#bd00ff] font-bold" : "text-gray-400"}}">
                     👤 ${{item.is_gov ? "総裁 (Governor)" : "記者/その他"}}
                 </span>
                 <span class="text-gray-500 font-mono">🕒 ${{formatTime(item.start)}}</span>
@@ -497,9 +498,9 @@ with col2:
             symmetric=False,
             array=forest_df["Upper"] - forest_df["Coef"],
             arrayminus=forest_df["Coef"] - forest_df["Lower"],
-            color="#66fcf1"
+            color="#bd00ff"
         ),
-        marker=dict(size=12, color="#66fcf1"),
+        marker=dict(size=12, color="#bd00ff"),
         name="Coefficient"
     ))
     fig_forest.add_shape(type="line", x0=0, y0=-0.5, x1=0, y1=len(forest_df)-0.5, line=dict(color="white", width=1, dash="dash"))
