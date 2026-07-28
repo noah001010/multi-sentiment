@@ -71,15 +71,27 @@ def load_and_filter_forex_data(csv_path: str, conference_start_time_str: str) ->
     filtered_df.dropna(subset=['return'], inplace=True)
     return filtered_df[['datetime', 'close', 'return']]
 
+# --- システム固定設定 ---
+video_path = "data/boj_conference.mp4"
+integrated_path = "output/integrated_results.csv"
+forex_path = "data/DAT_ASCII_USDJPY_M1_2023.csv"
+start_time_str = "2023-06-16 15:30:00"
+governor_only = True
+
 # --- サイドバー ---
 with st.sidebar:
-    st.header("⚡ System Config")
-    video_path = st.text_input("動画ファイルパス (.mp4)", value="data/boj_conference.mp4")
-    integrated_path = st.text_input("統合結果 CSVパス", value="output/integrated_results.csv")
-    forex_path = st.text_input("為替ヒストリカル CSVパス", value="data/DAT_ASCII_USDJPY_M1_2023.csv")
-    start_time_str = st.text_input("会見開始基準時刻 (JST)", value="2023-06-16 15:30:00")
-    governor_only = st.checkbox("回帰分析は総裁発話のみに絞る", value=True)
-    st.info("💡 JST基準の開始時刻を入力してください。為替データ(EST)は自動で時差補正されます。")
+    st.header("⚡ System Status")
+    st.success("🤖 Pipeline Status: ONLINE")
+    
+    st.markdown("### 📁 Dataset Configurations")
+    st.code(
+        f"Video Path: {video_path}\n"
+        f"Integ CSV : {integrated_path}\n"
+        f"Forex CSV : {forex_path}\n"
+        f"Start Time: {start_time_str}\n"
+        f"Gov Only  : {governor_only}"
+    )
+    st.info("💡 デモ実演用に動画パスおよび開始時刻設定は固定されています。")
 
 # データ存在チェック
 if not os.path.exists(integrated_path):
@@ -88,6 +100,13 @@ if not os.path.exists(integrated_path):
 if not os.path.exists(forex_path):
     st.warning(f"⚠️ `{forex_path}` が見つかりません。パスを確認してください。")
     st.stop()
+
+# --- 規格化ヘルパー ---
+def min_max_normalize(series: pd.Series) -> pd.Series:
+    s_min, s_max = series.min(), series.max()
+    if s_min == s_max:
+        return pd.Series(0.0, index=series.index)
+    return -1.0 + 2.0 * (series - s_min) / (s_max - s_min)
 
 # --- データの読み込み ---
 df_integ = pd.read_csv(integrated_path)
@@ -130,9 +149,14 @@ vif_data["Variable"] = X_with_const.columns
 vif_data["VIF"] = [variance_inflation_factor(X_with_const.values, i) for i in range(X_with_const.shape[1])]
 
 # JS/HTML コンポーネント用のデータ準備
-# 1. 1分足の感情&為替データ
+# 1. 1分足の感情&為替データ (可視化用に感情・緊張データを [-1, 1] に規格化)
+df_plot = df_merged.copy()
+for col in ['text_score', 'face_emotion_score', 'face_arousal_score', 'audio_emotion_score', 'audio_arousal_score']:
+    if col in df_plot.columns:
+        df_plot[col] = min_max_normalize(df_plot[col])
+
 chart_data_list = []
-for _, row in df_merged.iterrows():
+for _, row in df_plot.iterrows():
     minutes = (row["datetime"] - conference_start_time).total_seconds() / 60.0
     chart_data_list.append({
         "m": round(minutes, 2),
@@ -345,11 +369,11 @@ custom_html = f"""
                 }},
                 y_emotion: {{
                     position: 'left',
-                    title: {{ display: true, text: '感情・緊張スコア', color: '#c5c6c7' }},
+                    title: {{ display: true, text: '感情・緊張スコア (規格化 [-1, 1])', color: '#c5c6c7' }},
                     grid: {{ color: '#1f2833' }},
                     ticks: {{ color: '#c5c6c7' }},
-                    min: -2,
-                    max: 2
+                    min: -1.2,
+                    max: 1.2
                 }},
                 y_forex: {{
                     position: 'right',
