@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>JS動作テスト</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- Chart.js: head内に同期ロード -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js"></script>
+<style>
+  body { background:#0b0f19; color:#f8fafc; font-family:sans-serif; margin:0; padding:8px; }
+  #log { background:#1e293b; padding:10px; border-radius:8px; font-family:monospace; font-size:12px; height:120px; overflow-y:auto; }
+</style>
+</head>
+<body>
+<div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;height:600px">
+  <!-- 左: 動画 + チャート -->
+  <div style="display:flex;flex-direction:column;gap:8px">
+    <div style="background:#101625;padding:8px;border-radius:12px">
+      <!-- テスト用: Big Buck Bunny (シーク可能なオープンソース動画) -->
+      <video id="vid" controls preload="metadata" style="width:100%;border-radius:8px">
+        <source src="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4" type="video/mp4">
+      </video>
+    </div>
+    <div style="background:#101625;padding:12px;border-radius:12px;flex:1">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="color:#8a7eff;font-weight:bold">感情分析の推移</span>
+        <span id="timedisp" style="font-family:monospace;background:rgba(0,0,0,0.4);padding:4px 12px;border-radius:6px;border:1px solid #374151">00:00</span>
+      </div>
+      <div style="position:relative;height:200px">
+        <canvas id="chartCanvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右: タイムスタンプテスト -->
+  <div style="background:#101625;padding:12px;border-radius:12px;overflow-y:auto">
+    <div style="color:#8a7eff;font-weight:bold;margin-bottom:8px">タイムスタンプクリックテスト</div>
+    <div onclick="seekTo(0)"   style="background:#111827;border:1px solid #374151;padding:10px;border-radius:8px;cursor:pointer;margin-bottom:6px">
+      <span style="color:#6366f1;font-family:monospace;text-decoration:underline" onclick="event.stopPropagation();seekTo(0)">00:00</span>
+      <p style="font-size:13px;margin:4px 0 0">開始点 → この時間にジャンプ</p>
+    </div>
+    <div onclick="seekTo(30)"  style="background:#111827;border:1px solid #374151;padding:10px;border-radius:8px;cursor:pointer;margin-bottom:6px">
+      <span style="color:#6366f1;font-family:monospace;text-decoration:underline" onclick="event.stopPropagation();seekTo(30)">00:30</span>
+      <p style="font-size:13px;margin:4px 0 0">30秒 → この時間にジャンプ</p>
+    </div>
+    <div onclick="seekTo(60)"  style="background:#111827;border:1px solid #374151;padding:10px;border-radius:8px;cursor:pointer;margin-bottom:6px">
+      <span style="color:#6366f1;font-family:monospace;text-decoration:underline" onclick="event.stopPropagation();seekTo(60)">01:00</span>
+      <p style="font-size:13px;margin:4px 0 0">1分 → この時間にジャンプ</p>
+    </div>
+    <div onclick="seekTo(120)" style="background:#111827;border:1px solid #374151;padding:10px;border-radius:8px;cursor:pointer;margin-bottom:6px">
+      <span style="color:#6366f1;font-family:monospace;text-decoration:underline" onclick="event.stopPropagation();seekTo(120)">02:00</span>
+      <p style="font-size:13px;margin:4px 0 0">2分 → この時間にジャンプ</p>
+    </div>
+    <!-- デバッグログ -->
+    <div style="margin-top:12px;font-weight:bold;color:#f59e0b">デバッグログ:</div>
+    <div id="log"></div>
+    <div id="status" style="margin-top:8px;padding:8px;border-radius:6px;font-size:12px">確認中...</div>
+  </div>
+</div>
+
+<script>
+// ---- ログ関数 ----
+function log(msg, color) {
+  var el = document.getElementById('log');
+  var line = document.createElement('div');
+  line.style.color = color || '#94a3b8';
+  line.textContent = new Date().toISOString().slice(11,19) + ' ' + msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+// ---- seekTo (グローバル) ----
+function seekTo(t) {
+  var v = document.getElementById('vid');
+  if (!v) { log('ERROR: video not found', '#ef4444'); return; }
+  log('seekTo(' + t + ') called, current=' + v.currentTime.toFixed(1), '#34d399');
+  v.currentTime = parseFloat(t);
+  var p = v.play();
+  if (p && p.catch) p.catch(function(e){ log('play() blocked: ' + e, '#f59e0b'); });
+}
+
+// ---- チャート初期化 ----
+// テストデータ (0〜10分の偽感情スコア)
+var chartData = [];
+for (var i = 0; i <= 10; i += 0.5) {
+  chartData.push({
+    m: i,
+    text:      Math.sin(i * 0.8) * 0.7,
+    face_val:  Math.cos(i * 0.5) * 0.5,
+    face_aro:  Math.sin(i * 1.2) * 0.3,
+    audio_val: Math.cos(i * 0.9) * 0.6,
+    close:     130 + Math.sin(i * 0.3) * 2
+  });
+}
+
+function fmt(s) {
+  if (!isFinite(s) || s < 0) s = 0;
+  var m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+}
+
+function initChart() {
+  log('initChart() start', '#818cf8');
+  var video    = document.getElementById('vid');
+  var timeDisp = document.getElementById('timedisp');
+  var canvas   = document.getElementById('chartCanvas');
+  var status   = document.getElementById('status');
+
+  if (!video || !timeDisp || !canvas) {
+    log('ERROR: DOM elements missing', '#ef4444');
+    return;
+  }
+  if (typeof Chart === 'undefined') {
+    log('ERROR: Chart is undefined', '#ef4444');
+    status.style.background = '#7f1d1d';
+    status.textContent = '❌ Chart.js ロード失敗';
+    return;
+  }
+
+  log('Chart.js version: ' + Chart.version, '#34d399');
+  status.style.background = '#14532d';
+  status.textContent = '✅ Chart.js ロード成功: v' + Chart.version;
+
+  var vlPlugin = {
+    id: 'vl',
+    afterDraw: function(c) {
+      var opts = c.config.options.plugins.vl;
+      if (!opts || opts.x === undefined) return;
+      var xa = c.scales.x, ya = c.scales.y;
+      var px = xa.getPixelForValue(opts.x);
+      if (px < xa.left || px > xa.right) return;
+      var ctx = c.ctx;
+      ctx.save();
+      ctx.beginPath(); ctx.moveTo(px, ya.top); ctx.lineTo(px, ya.bottom);
+      ctx.lineWidth = 2; ctx.setLineDash([5,4]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.shadowColor = '#635bff'; ctx.shadowBlur = 8;
+      ctx.stroke(); ctx.restore();
+    }
+  };
+  Chart.register(vlPlugin);
+
+  var chart = new Chart(canvas.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: chartData.map(function(d){ return d.m; }),
+      datasets: [
+        { label:'言語感情',    data: chartData.map(function(d){ return d.text; }),      borderColor:'#2ecc71', borderWidth:2, pointRadius:0, yAxisID:'e' },
+        { label:'表情ポジネガ', data: chartData.map(function(d){ return d.face_val; }),  borderColor:'#e74c3c', borderWidth:2, pointRadius:0, yAxisID:'e' },
+        { label:'音声感情',    data: chartData.map(function(d){ return d.audio_val; }), borderColor:'#3498db', borderWidth:2, pointRadius:0, yAxisID:'e' },
+        { label:'USD/JPY',     data: chartData.map(function(d){ return d.close; }),     borderColor:'#f1c40f', borderWidth:3, pointRadius:0, yAxisID:'f' },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        x: { grid:{color:'#1f2833'}, ticks:{color:'#9ca3af'} },
+        e: { position:'left',  min:-1.2, max:1.2, grid:{color:'#1f2833'}, ticks:{color:'#9ca3af'} },
+        f: { position:'right', grid:{drawOnChartArea:false}, ticks:{color:'#9ca3af'} }
+      },
+      plugins: {
+        legend: { labels:{color:'#9ca3af'} },
+        vl: { x: 0 }
+      }
+    }
+  });
+
+  log('Chart created successfully', '#34d399');
+
+  video.addEventListener('timeupdate', function() {
+    var t = video.currentTime;
+    timeDisp.innerText = fmt(t);
+    chart.config.options.plugins.vl.x = t / 60.0;
+    chart.update('none');
+  });
+
+  log('timeupdate listener registered', '#34d399');
+}
+
+// ---- 初期化タイミング: readyState チェック + ポーリング ----
+log('Script start, readyState=' + document.readyState, '#94a3b8');
+
+function tryInit() {
+  if (typeof Chart !== 'undefined') {
+    log('Chart available, calling initChart()', '#818cf8');
+    initChart();
+  } else {
+    log('Chart not yet available, retry in 100ms...', '#f59e0b');
+    setTimeout(tryInit, 100);
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', function() {
+    log('DOMContentLoaded fired', '#94a3b8');
+    tryInit();
+  });
+} else {
+  log('DOM already ready', '#94a3b8');
+  tryInit();
+}
+</script>
+</body>
+</html>
