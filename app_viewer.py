@@ -100,14 +100,30 @@ if not os.path.exists(forex_path):
 
 # --- 規格化ヘルパー ---
 def min_max_normalize(series: pd.Series) -> pd.Series:
-    s_min, s_max = series.min(), series.max()
+    series_clean = series.fillna(0.0)
+    s_min, s_max = series_clean.min(), series_clean.max()
     if s_min == s_max:
         return pd.Series(0.0, index=series.index)
-    return -1.0 + 2.0 * (series - s_min) / (s_max - s_min)
+    return -1.0 + 2.0 * (series_clean - s_min) / (s_max - s_min)
 
 # --- データの読み込み ---
 df_integ = pd.read_csv(integrated_path)
 df_fin = load_and_filter_forex_data(forex_path, start_time_str)
+
+# 欠損値 (NaN) の事前クレンジング (JS構文エラー防止)
+df_integ['start'] = df_integ['start'].fillna(0.0)
+df_integ['end'] = df_integ['end'].fillna(0.0)
+df_integ['text'] = df_integ['text'].fillna('')
+df_integ['speaker'] = df_integ['speaker'].fillna('UNKNOWN')
+if 'is_governor' in df_integ.columns:
+    df_integ['is_governor'] = df_integ['is_governor'].fillna(False)
+else:
+    df_integ['is_governor'] = False
+
+if 'text_score' in df_integ.columns:
+    df_integ['text_score'] = df_integ['text_score'].fillna(0.0)
+else:
+    df_integ['text_score'] = 0.0
 
 # 静的フォルダへの動画のコピー確認
 static_dir = Path("static")
@@ -134,7 +150,6 @@ df_merged = pd.merge(df_fin, df_integ_1min, on='datetime', how='inner')
 df_merged = df_merged.dropna(subset=['return'] + available_vars)
 
 # JS/HTML コンポーネント用のデータ準備
-# 1. 1分足の感情&為替データ (可視化用に感情・緊張データを [-1, 1] に規格化)
 df_plot = df_merged.copy()
 for col in ['text_score', 'face_emotion_score', 'face_arousal_score', 'audio_emotion_score', 'audio_arousal_score']:
     if col in df_plot.columns:
@@ -144,7 +159,7 @@ chart_data_list = []
 for _, row in df_plot.iterrows():
     minutes = (row["datetime"] - conference_start_time).total_seconds() / 60.0
     chart_data_list.append({
-        "m": round(minutes, 2),
+        "m": round(float(minutes), 2),
         "close": round(float(row["close"]), 4),
         "text": round(float(row["text_score"]), 4) if 'text_score' in row else 0.0,
         "face_val": round(float(row["face_emotion_score"]), 4) if 'face_emotion_score' in row else 0.0,
@@ -153,7 +168,7 @@ for _, row in df_plot.iterrows():
         "audio_aro": round(float(row["audio_arousal_score"]), 4) if 'audio_arousal_score' in row else 0.0,
     })
 
-# 2. 全セグメントの文字起こしデータ
+# 全セグメントの文字起こしデータ
 transcript_list = []
 for idx, row in df_integ.iterrows():
     transcript_list.append({
@@ -194,11 +209,10 @@ custom_html = f"""
         border: 1px solid rgba(99, 91, 255, 0.15);
     }}
     .active-glow {{
-        background: rgba(99, 91, 255, 0.15) !important;
+        background: rgba(99, 91, 255, 0.18) !important;
         border: 2px solid #635bff !important;
         box-shadow: 0 0 20px rgba(99, 91, 255, 0.4);
     }}
-    /* スクロールバーのカスタマイズ */
     ::-webkit-scrollbar {{
         width: 6px;
     }}
@@ -221,7 +235,7 @@ custom_html = f"""
     <div class="lg:col-span-2 space-y-4">
         <!-- 動画プレイヤー -->
         <div class="bg-[#101625] p-3 rounded-xl glow-border">
-            <video id="boj_video" class="w-full rounded-lg shadow-2xl" controls>
+            <video id="boj_video" class="w-full rounded-lg shadow-2xl" controls preload="auto">
                 <source src="{video_url}" type="video/mp4">
                 <source src="http://localhost:8000/{video_basename}" type="video/mp4">
             </video>
@@ -250,6 +264,14 @@ custom_html = f"""
 </div>
 
 <script>
+    // 0. 時間フォーマットヘルパー関数 (最上部に配置)
+    function formatTime(seconds) {{
+        if (isNaN(seconds) || seconds < 0) return "00:00";
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${{String(mins).padStart(2, '0')}}:${{String(secs).padStart(2, '0')}}`;
+    }}
+
     const chartData = {chart_json};
     const transcriptData = {transcript_json};
 
@@ -265,7 +287,7 @@ custom_html = f"""
     const audioValScores = chartData.map(d => d.audio_val);
     const fxPrices = chartData.map(d => d.close);
 
-    // カスタム垂直線描画プラグイン（現在再生時間を表示）
+    // カスタム垂直線描画プラグイン（現在再生時間の動的バー表示）
     const verticalLinePlugin = {{
         id: 'verticalLine',
         afterDraw: (chart) => {{
@@ -275,18 +297,20 @@ custom_html = f"""
                 const yAxis = chart.scales.y;
                 const xPixel = xAxis.getPixelForValue(xValue);
                 
-                const ctx = chart.ctx;
-                ctx.save();
-                ctx.beginPath();
-                ctx.moveTo(xPixel, yAxis.top);
-                ctx.lineTo(xPixel, yAxis.bottom);
-                ctx.lineWidth = 2;
-                ctx.setLineDash([4, 4]);
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
-                ctx.shadowColor = '#635bff';
-                ctx.shadowBlur = 6;
-                ctx.stroke();
-                ctx.restore();
+                if (xPixel >= xAxis.left && xPixel <= xAxis.right) {{
+                    const ctx = chart.ctx;
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.moveTo(xPixel, yAxis.top);
+                    ctx.lineTo(xPixel, yAxis.bottom);
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([5, 5]);
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.shadowColor = '#635bff';
+                    ctx.shadowBlur = 8;
+                    ctx.stroke();
+                    ctx.restore();
+                }}
             }}
         }}
     }};
@@ -381,7 +405,7 @@ custom_html = f"""
         }}
     }});
 
-    // 2. 発言内容リストの動的生成
+    // 2. 安全な DOM 生成による発言内容リストのレンダリング
     transcriptData.forEach((item, index) => {{
         const card = document.createElement("div");
         card.id = `card-${{index}}`;
@@ -396,32 +420,42 @@ custom_html = f"""
             video.play();
         }};
 
+        const headerDiv = document.createElement("div");
+        headerDiv.className = "flex justify-between items-center mb-1 text-xs";
+        
+        const speakerSpan = document.createElement("span");
+        speakerSpan.className = item.is_gov ? "text-[#8a7eff] font-bold" : "text-gray-400";
+        speakerSpan.textContent = item.is_gov ? "総裁" : "記者/その他";
+        
+        const timeSpan = document.createElement("span");
+        timeSpan.className = "text-gray-400 hover:text-white font-mono underline cursor-pointer";
+        timeSpan.textContent = formatTime(item.start);
+        timeSpan.onclick = (e) => {{
+            e.stopPropagation();
+            video.currentTime = item.start;
+            video.play();
+        }};
+
+        headerDiv.appendChild(speakerSpan);
+        headerDiv.appendChild(timeSpan);
+
+        const pText = document.createElement("p");
+        pText.className = "text-sm leading-relaxed text-gray-100";
+        pText.textContent = item.text;
+
+        const scoreDiv = document.createElement("div");
+        scoreDiv.className = "mt-2 text-[11px] text-indigo-300 font-mono bg-indigo-950/60 px-2 py-0.5 rounded inline-block";
         const scoreSign = item.text_score > 0 ? "+" : "";
-        card.innerHTML = `
-            <div class="flex justify-between items-center mb-1 text-xs">
-                <span class="${{item.is_gov ? "text-[#8a7eff] font-bold" : "text-gray-400"}}">
-                    ${{item.is_gov ? "総裁" : "記者/その他"}}
-                </span>
-                <span class="text-gray-400 hover:text-white font-mono underline cursor-pointer" onclick="event.stopPropagation(); video.currentTime = ${{item.start}}; video.play();">
-                    ${{formatTime(item.start)}}
-                </span>
-            </div>
-            <p class="text-sm leading-relaxed">${{item.text}}</p>
-            <div class="mt-2 text-[11px] text-indigo-300 font-mono bg-indigo-950/60 px-2 py-0.5 rounded inline-block">
-                テキスト感情スコア: ${{scoreSign}}${{item.text_score}}
-            </div>
-        `;
+        scoreDiv.textContent = `テキスト感情スコア: ${{scoreSign}}${{item.text_score}}`;
+
+        card.appendChild(headerDiv);
+        card.appendChild(pText);
+        card.appendChild(scoreDiv);
+
         transcriptContainer.appendChild(card);
     }});
 
-    // 3. 時間フォーマット
-    function formatTime(seconds) {{
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        return `${{String(mins).padStart(2, '0')}}:${{String(secs).padStart(2, '0')}}`;
-    }}
-
-    // 4. 動画再生とアライメント・シークの同期
+    // 3. 動画再生とアライメント・シークの同期イベント
     video.addEventListener("timeupdate", () => {{
         const curTime = video.currentTime;
         timeDisplay.innerText = formatTime(curTime);
@@ -460,5 +494,5 @@ custom_html = f"""
 </body>
 </html>
 """
-# リアルタイムビューアーの描画 (高さ790px)
+
 components.html(custom_html, height=790, scrolling=False)
