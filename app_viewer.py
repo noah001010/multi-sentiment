@@ -74,7 +74,6 @@ video_path = "data/boj_conference.mp4"
 integrated_path = "output/integrated_results.csv"
 forex_path = "data/DAT_ASCII_USDJPY_M1_2023.csv"
 start_time_str = "2023-06-16 15:30:00"
-governor_only = True
 
 # --- サイドバー ---
 with st.sidebar:
@@ -86,8 +85,7 @@ with st.sidebar:
         f"Video Path: {video_path}\n"
         f"Integ CSV : {integrated_path}\n"
         f"Forex CSV : {forex_path}\n"
-        f"Start Time: {start_time_str}\n"
-        f"Gov Only  : {governor_only}"
+        f"Start Time: {start_time_str}"
     )
 
 # データ存在チェック
@@ -106,24 +104,49 @@ def min_max_normalize(series: pd.Series) -> pd.Series:
         return pd.Series(0.0, index=series.index)
     return -1.0 + 2.0 * (series_clean - s_min) / (s_max - s_min)
 
-# --- データの読み込み ---
+# --- データの読み込み & 表記揺れ自動吸収 ---
 df_integ = pd.read_csv(integrated_path)
 df_fin = load_and_filter_forex_data(forex_path, start_time_str)
 
-# 欠損値 (NaN) の事前クレンジング (JS構文エラー防止)
+# 1. カラム名の別名吸収 (互換性担保)
+if 'text' not in df_integ.columns:
+    for col in ['sentence', 'content', 'transcript']:
+        if col in df_integ.columns:
+            df_integ['text'] = df_integ[col]
+            break
+
+if 'text_score' not in df_integ.columns:
+    for col in ['sentiment_score', 'sentiment', 'text_sentiment']:
+        if col in df_integ.columns:
+            df_integ['text_score'] = df_integ[col]
+            break
+
+if 'start' not in df_integ.columns:
+    for col in ['start_time', 'start_sec']:
+        if col in df_integ.columns:
+            df_integ['start'] = df_integ[col]
+            break
+
+if 'end' not in df_integ.columns:
+    for col in ['end_time', 'end_sec']:
+        if col in df_integ.columns:
+            df_integ['end'] = df_integ[col]
+            break
+
+# 2. is_governor 列の文字列/数値 -> 真偽値の確実な変換
+if 'is_governor' in df_integ.columns:
+    df_integ['is_governor'] = df_integ['is_governor'].astype(str).str.lower().isin(['true', '1', 't', '1.0'])
+elif 'speaker' in df_integ.columns:
+    df_integ['is_governor'] = df_integ['speaker'].astype(str).str.contains('SPEAKER_15|SPEAKER_00|GOVERNOR', case=False, regex=True)
+else:
+    df_integ['is_governor'] = True
+
+# 3. 欠損値 (NaN) の事前処理
 df_integ['start'] = df_integ['start'].fillna(0.0)
 df_integ['end'] = df_integ['end'].fillna(0.0)
 df_integ['text'] = df_integ['text'].fillna('')
-df_integ['speaker'] = df_integ['speaker'].fillna('UNKNOWN')
-if 'is_governor' in df_integ.columns:
-    df_integ['is_governor'] = df_integ['is_governor'].fillna(False)
-else:
-    df_integ['is_governor'] = False
-
-if 'text_score' in df_integ.columns:
-    df_integ['text_score'] = df_integ['text_score'].fillna(0.0)
-else:
-    df_integ['text_score'] = 0.0
+df_integ['text_score'] = df_integ['text_score'].fillna(0.0)
+df_integ['speaker'] = df_integ.get('speaker', pd.Series(['UNKNOWN']*len(df_integ))).fillna('UNKNOWN')
 
 # 静的フォルダへの動画のコピー確認
 static_dir = Path("static")
@@ -264,7 +287,7 @@ custom_html = f"""
 </div>
 
 <script>
-    // 0. 時間フォーマットヘルパー関数 (最上部に配置)
+    // 0. 時間フォーマットヘルパー関数
     function formatTime(seconds) {{
         if (isNaN(seconds) || seconds < 0) return "00:00";
         const mins = Math.floor(seconds / 60);
@@ -287,7 +310,7 @@ custom_html = f"""
     const audioValScores = chartData.map(d => d.audio_val);
     const fxPrices = chartData.map(d => d.close);
 
-    // カスタム垂直線描画プラグイン（現在再生時間の動的バー表示）
+    // カスタム垂直線描画プラグイン
     const verticalLinePlugin = {{
         id: 'verticalLine',
         afterDraw: (chart) => {{
@@ -406,54 +429,61 @@ custom_html = f"""
     }});
 
     // 2. 安全な DOM 生成による発言内容リストのレンダリング
-    transcriptData.forEach((item, index) => {{
-        const card = document.createElement("div");
-        card.id = `card-${{index}}`;
-        card.className = `p-3 rounded-lg cursor-pointer transition duration-300 border ${{
-            item.is_gov 
-                ? "bg-[#0b0c10] border-indigo-900/60 hover:bg-indigo-950/40" 
-                : "bg-gray-900 border-gray-800 hover:bg-gray-800"
-        }}`;
-        
-        card.onclick = () => {{
-            video.currentTime = item.start;
-            video.play();
-        }};
+    if (transcriptData && transcriptData.length > 0) {{
+        transcriptData.forEach((item, index) => {{
+            const card = document.createElement("div");
+            card.id = `card-${{index}}`;
+            card.className = `p-3 rounded-lg cursor-pointer transition duration-300 border ${{
+                item.is_gov 
+                    ? "bg-[#0b0c10] border-indigo-900/60 hover:bg-indigo-950/40" 
+                    : "bg-gray-900 border-gray-800 hover:bg-gray-800"
+            }}`;
+            
+            card.onclick = () => {{
+                video.currentTime = item.start;
+                video.play();
+            }};
 
-        const headerDiv = document.createElement("div");
-        headerDiv.className = "flex justify-between items-center mb-1 text-xs";
-        
-        const speakerSpan = document.createElement("span");
-        speakerSpan.className = item.is_gov ? "text-[#8a7eff] font-bold" : "text-gray-400";
-        speakerSpan.textContent = item.is_gov ? "総裁" : "記者/その他";
-        
-        const timeSpan = document.createElement("span");
-        timeSpan.className = "text-gray-400 hover:text-white font-mono underline cursor-pointer";
-        timeSpan.textContent = formatTime(item.start);
-        timeSpan.onclick = (e) => {{
-            e.stopPropagation();
-            video.currentTime = item.start;
-            video.play();
-        }};
+            const headerDiv = document.createElement("div");
+            headerDiv.className = "flex justify-between items-center mb-1 text-xs";
+            
+            const speakerSpan = document.createElement("span");
+            speakerSpan.className = item.is_gov ? "text-[#8a7eff] font-bold" : "text-gray-400";
+            speakerSpan.textContent = item.is_gov ? "総裁" : "記者/その他";
+            
+            const timeSpan = document.createElement("span");
+            timeSpan.className = "text-gray-400 hover:text-white font-mono underline cursor-pointer";
+            timeSpan.textContent = formatTime(item.start);
+            timeSpan.onclick = (e) => {{
+                e.stopPropagation();
+                video.currentTime = item.start;
+                video.play();
+            }};
 
-        headerDiv.appendChild(speakerSpan);
-        headerDiv.appendChild(timeSpan);
+            headerDiv.appendChild(speakerSpan);
+            headerDiv.appendChild(timeSpan);
 
-        const pText = document.createElement("p");
-        pText.className = "text-sm leading-relaxed text-gray-100";
-        pText.textContent = item.text;
+            const pText = document.createElement("p");
+            pText.className = "text-sm leading-relaxed text-gray-100";
+            pText.textContent = item.text;
 
-        const scoreDiv = document.createElement("div");
-        scoreDiv.className = "mt-2 text-[11px] text-indigo-300 font-mono bg-indigo-950/60 px-2 py-0.5 rounded inline-block";
-        const scoreSign = item.text_score > 0 ? "+" : "";
-        scoreDiv.textContent = `テキスト感情スコア: ${{scoreSign}}${{item.text_score}}`;
+            const scoreDiv = document.createElement("div");
+            scoreDiv.className = "mt-2 text-[11px] text-indigo-300 font-mono bg-indigo-950/60 px-2 py-0.5 rounded inline-block";
+            const scoreSign = item.text_score > 0 ? "+" : "";
+            scoreDiv.textContent = `テキスト感情スコア: ${{scoreSign}}${{item.text_score}}`;
 
-        card.appendChild(headerDiv);
-        card.appendChild(pText);
-        card.appendChild(scoreDiv);
+            card.appendChild(headerDiv);
+            card.appendChild(pText);
+            card.appendChild(scoreDiv);
 
-        transcriptContainer.appendChild(card);
-    }});
+            transcriptContainer.appendChild(card);
+        }});
+    }} else {{
+        const emptyDiv = document.createElement("div");
+        emptyDiv.className = "p-4 text-center text-gray-500 text-sm";
+        emptyDiv.textContent = "発言データがロードされていません。";
+        transcriptContainer.appendChild(emptyDiv);
+    }}
 
     // 3. 動画再生とアライメント・シークの同期イベント
     video.addEventListener("timeupdate", () => {{
