@@ -113,9 +113,14 @@ for col in ['start','end','text_score','face_emotion_score','face_arousal_score'
 df['text']    = df['text'].fillna('').astype(str)
 df['speaker'] = df.get('speaker', pd.Series(['UNKNOWN']*len(df))).fillna('UNKNOWN')
 
-# ── 動画 ──
+# ── 動画ソース（port 8000 = range request対応でシーク可能）
 video_basename = os.path.basename(VIDEO_PATH)
 video_src      = f"http://localhost:8000/{video_basename}"
+
+# chart.js ローカルキャッシュがあればそちらを使用、なければCDN
+chartjs_local = "http://localhost:8000/chart.umd.min.js"
+chartjs_cdn   = "https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js"
+chartjs_url   = chartjs_local  # start_demo.sh でダウンロードされる
 
 # ── チャートデータ（1分足） ──
 t0   = pd.to_datetime(START_STR)
@@ -179,7 +184,7 @@ with st.sidebar:
     st.markdown(f"**発言セグメント:** {len(df)} 件")
     st.markdown(f"**チャートデータ:** {len(chart_data)} 件")
 
-# ── ダッシュボード ──
+# ── ダッシュボード
 st.title("BOJ Governor Multimodal Real-Time Aligner")
 
 custom_html = f"""<!DOCTYPE html>
@@ -187,6 +192,8 @@ custom_html = f"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <script src="https://cdn.tailwindcss.com"></script>
+<!-- Chart.js: ローカルキャッシュ or CDN -->
+<script src="{chartjs_url}" onerror="this.src='{chartjs_cdn}'"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap');
   body {{ font-family:'Outfit',sans-serif; background:#0b0f19; color:#f8fafc; margin:0; padding:8px; }}
@@ -236,96 +243,92 @@ custom_html = f"""<!DOCTYPE html>
 
 </div>
 
-<!-- Step 1: chartData と seekTo を最初に定義（Chart.js不要） -->
+<!-- Step 1: chartData と seekTo を定義（Chart.js不要） -->
 <script>
-const chartData = {chart_json};
+var chartData = {chart_json};
 
 function fmt(s) {{
   if (!isFinite(s) || s < 0) s = 0;
-  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
-  return `${{String(m).padStart(2,'0')}}:${{String(sec).padStart(2,'0')}}`;
+  var m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
 }}
 
-// カードのonclickから呼ばれるシーク関数
 function seekTo(t) {{
-  const v = document.getElementById('vid');
-  if (!v) {{ console.error('video not found'); return; }}
-  v.currentTime = Number(t);
-  v.play().catch(e => console.warn('play():', e));
+  var v = document.getElementById('vid');
+  if (!v) return;
+  v.currentTime = parseFloat(t);
+  var p = v.play();
+  if (p && p.catch) p.catch(function(){{}});
 }}
 </script>
 
-<!-- Step 2: Chart.js 読み込み完了後にチャートと再生同期を初期化 -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js" onload="initChart()"></script>
+<!-- Chart.js (head内のscriptが先に読まれている) -->
 <script>
-function initChart() {{
-  const video    = document.getElementById('vid');
-  const timeDisp = document.getElementById('timedisp');
-  const canvas   = document.getElementById('chartCanvas');
-  if (!video || !timeDisp || !canvas) {{ console.error('DOM not found'); return; }}
+// window.onload: Tailwind + Chart.js + DOM が全部揃ってから実行
+window.addEventListener('load', function() {{
+  var video    = document.getElementById('vid');
+  var timeDisp = document.getElementById('timedisp');
+  var canvas   = document.getElementById('chartCanvas');
 
-  // 現在再生位置を示す縦線プラグイン
-  const vlPlugin = {{
+  if (!video || !timeDisp || !canvas) {{
+    console.error('Required DOM elements not found'); return;
+  }}
+  if (typeof Chart === 'undefined') {{
+    console.error('Chart.js not loaded'); return;
+  }}
+
+  var vlPlugin = {{
     id: 'vl',
-    afterDraw(c) {{
-      const xv = c.config.options.plugins.vl && c.config.options.plugins.vl.x;
-      if (xv === undefined || xv === null) return;
-      const xa = c.scales.x, ya = c.scales.y;
-      const px = xa.getPixelForValue(xv);
+    afterDraw: function(c) {{
+      var opts = c.config.options.plugins.vl;
+      if (!opts || opts.x === undefined) return;
+      var xa = c.scales.x, ya = c.scales.y;
+      var px = xa.getPixelForValue(opts.x);
       if (px < xa.left || px > xa.right) return;
-      const ctx = c.ctx;
+      var ctx = c.ctx;
       ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(px, ya.top);
-      ctx.lineTo(px, ya.bottom);
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.moveTo(px, ya.top); ctx.lineTo(px, ya.bottom);
+      ctx.lineWidth = 2; ctx.setLineDash([5,4]);
       ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-      ctx.shadowColor = '#635bff';
-      ctx.shadowBlur = 8;
-      ctx.stroke();
-      ctx.restore();
+      ctx.shadowColor = '#635bff'; ctx.shadowBlur = 8;
+      ctx.stroke(); ctx.restore();
     }}
   }};
   Chart.register(vlPlugin);
 
-  const chart = new Chart(canvas.getContext('2d'), {{
+  var chart = new Chart(canvas.getContext('2d'), {{
     type: 'line',
     data: {{
-      labels: chartData.map(d => d.m),
+      labels: chartData.map(function(d){{return d.m;}}),
       datasets: [
-        {{ label:'言語感情',    data: chartData.map(d => d.text),      borderColor:'#2ecc71', borderWidth:2, pointRadius:0, yAxisID:'e' }},
-        {{ label:'表情ポジネガ', data: chartData.map(d => d.face_val),  borderColor:'#e74c3c', borderWidth:2, pointRadius:0, yAxisID:'e' }},
-        {{ label:'表情緊張度',  data: chartData.map(d => d.face_aro),  borderColor:'#9b59b6', borderWidth:2, pointRadius:0, yAxisID:'e', borderDash:[5,5] }},
-        {{ label:'音声感情',    data: chartData.map(d => d.audio_val), borderColor:'#3498db', borderWidth:2, pointRadius:0, yAxisID:'e' }},
-        {{ label:'USD/JPY',     data: chartData.map(d => d.close),     borderColor:'#f1c40f', borderWidth:3, pointRadius:0, yAxisID:'f' }},
+        {{ label:'言語感情',    data:chartData.map(function(d){{return d.text;}}),      borderColor:'#2ecc71', borderWidth:2, pointRadius:0, yAxisID:'e' }},
+        {{ label:'表情ポジネガ', data:chartData.map(function(d){{return d.face_val;}}),  borderColor:'#e74c3c', borderWidth:2, pointRadius:0, yAxisID:'e' }},
+        {{ label:'表情緊張度',  data:chartData.map(function(d){{return d.face_aro;}}),  borderColor:'#9b59b6', borderWidth:2, pointRadius:0, yAxisID:'e', borderDash:[5,5] }},
+        {{ label:'音声感情',    data:chartData.map(function(d){{return d.audio_val;}}), borderColor:'#3498db', borderWidth:2, pointRadius:0, yAxisID:'e' }},
+        {{ label:'USD/JPY',     data:chartData.map(function(d){{return d.close;}}),     borderColor:'#f1c40f', borderWidth:3, pointRadius:0, yAxisID:'f' }},
       ]
     }},
     options: {{
-      responsive: true,
-      maintainAspectRatio: false,
+      responsive:true, maintainAspectRatio:false,
       scales: {{
-        x: {{ title:{{display:true, text:'経過時間 (分足)', color:'#9ca3af'}}, grid:{{color:'#1f2833'}}, ticks:{{color:'#9ca3af'}} }},
-        e: {{ position:'left',  title:{{display:true, text:'感情スコア [-1,1]', color:'#9ca3af'}}, min:-1.2, max:1.2, grid:{{color:'#1f2833'}}, ticks:{{color:'#9ca3af'}} }},
-        f: {{ position:'right', title:{{display:true, text:'USD/JPY', color:'#9ca3af'}}, grid:{{drawOnChartArea:false}}, ticks:{{color:'#9ca3af'}} }}
+        x: {{ title:{{display:true,text:'経過時間 (分足)',color:'#9ca3af'}}, grid:{{color:'#1f2833'}}, ticks:{{color:'#9ca3af'}} }},
+        e: {{ position:'left',  title:{{display:true,text:'感情スコア [-1,1]',color:'#9ca3af'}}, min:-1.2, max:1.2, grid:{{color:'#1f2833'}}, ticks:{{color:'#9ca3af'}} }},
+        f: {{ position:'right', title:{{display:true,text:'USD/JPY',color:'#9ca3af'}}, grid:{{drawOnChartArea:false}}, ticks:{{color:'#9ca3af'}} }}
       }},
       plugins: {{
-        legend: {{ position:'top', labels:{{color:'#9ca3af', boxWidth:10, font:{{size:10}}}} }},
+        legend: {{ position:'top', labels:{{color:'#9ca3af',boxWidth:10,font:{{size:10}}}} }},
         vl: {{ x: 0 }}
       }}
     }}
   }});
 
-  // 動画再生時間に連動してタイムスタンプ表示とチャート縦線を更新
   video.addEventListener('timeupdate', function() {{
-    const t = video.currentTime;
+    var t = video.currentTime;
     timeDisp.innerText = fmt(t);
     chart.config.options.plugins.vl.x = t / 60.0;
     chart.update('none');
   }});
-
-  console.log('✅ initChart complete, datasets:', chart.data.datasets.length);
-}}
+}});
 </script>
 </body>
 </html>
