@@ -3,564 +3,362 @@ import pandas as pd
 import numpy as np
 import json
 import os
-import sys
-import statsmodels.api as sm
-from statsmodels.stats.outliers_influence import variance_inflation_factor
+import html as html_lib
 from pathlib import Path
 import streamlit.components.v1 as components
 
 # --- ページ設定 ---
 st.set_page_config(
-    page_title="BOJ Multimodal Sentiment Dashboard", 
+    page_title="BOJ Multimodal Sentiment Dashboard",
     layout="wide"
 )
 
-# ガラスモーフィズムとStripe/OpenAI調のプレミアムスタイルの適用
 st.markdown("""
 <style>
-    /* 全体背景 */
-    .stApp {
-        background-color: #0b0f19;
-        color: #f8fafc;
-    }
-    
-    /* サイドバーの背景とテキスト色（高コントラスト化） */
+    .stApp { background-color: #0b0f19; color: #f8fafc; }
     [data-testid="stSidebar"] {
         background-color: #0f172a !important;
         border-right: 1px solid rgba(99, 91, 255, 0.3) !important;
     }
-    [data-testid="stSidebar"] * {
-        color: #f8fafc !important;
-    }
-    
-    /* 美しいグラデーション見出し */
+    [data-testid="stSidebar"] * { color: #f8fafc !important; }
     h1, h2, h3 {
         background: linear-gradient(135deg, #635bff 0%, #a388ff 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         font-family: 'Outfit', 'Inter', sans-serif;
         font-weight: 700;
-        text-shadow: 0 4px 12px rgba(99, 91, 255, 0.15);
-    }
-    
-    /* ガラスモーフカード */
-    .metric-card {
-        background: rgba(18, 24, 38, 0.6);
-        backdrop-filter: blur(12px);
-        border: 1px solid rgba(99, 91, 255, 0.15);
-        padding: 20px;
-        border-radius: 12px;
-        text-align: center;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
     }
 </style>
 """, unsafe_allow_html=True)
 
-def load_and_filter_forex_data(csv_path: str, conference_start_time_str: str) -> pd.DataFrame:
-    df = pd.read_csv(csv_path, sep=';', header=None, 
+
+def safe_float(v, default=0.0):
+    """NaN/Infを安全にfloatに変換する"""
+    try:
+        f = float(v)
+        if f != f or f == float('inf') or f == float('-inf'):
+            return default
+        return f
+    except Exception:
+        return default
+
+
+def load_and_filter_forex_data(csv_path: str, start_str: str) -> pd.DataFrame:
+    df = pd.read_csv(csv_path, sep=';', header=None,
                      names=['datetime_str', 'open', 'high', 'low', 'close', 'volume'])
     df['datetime'] = pd.to_datetime(df['datetime_str'], format='%Y%m%d %H%M%S')
-    df['datetime'] = df['datetime'] + pd.Timedelta(hours=14) # +14h JST offset
+    df['datetime'] += pd.Timedelta(hours=14)
     df.sort_values('datetime', inplace=True)
     df['return'] = np.log(df['close'] / df['close'].shift(1)) * 100
-    start_time = pd.to_datetime(conference_start_time_str)
-    end_time = start_time + pd.Timedelta(hours=1)
-    filtered_df = df[(df['datetime'] >= start_time) & (df['datetime'] <= end_time)].copy()
-    filtered_df.dropna(subset=['return'], inplace=True)
-    return filtered_df[['datetime', 'close', 'return']]
+    t0 = pd.to_datetime(start_str)
+    t1 = t0 + pd.Timedelta(hours=1)
+    out = df[(df['datetime'] >= t0) & (df['datetime'] <= t1)].copy()
+    out.dropna(subset=['return'], inplace=True)
+    return out[['datetime', 'close', 'return']]
 
-# --- システム固定設定 ---
-video_path = "data/boj_conference.mp4"
-integrated_path = "output/integrated_results.csv"
-forex_path = "data/DAT_ASCII_USDJPY_M1_2023.csv"
-start_time_str = "2023-06-16 15:30:00"
 
-# --- サイドバー ---
+def min_max_normalize(series: pd.Series) -> pd.Series:
+    s = series.fillna(0.0)
+    lo, hi = s.min(), s.max()
+    if lo == hi:
+        return pd.Series(0.0, index=series.index)
+    return -1.0 + 2.0 * (s - lo) / (hi - lo)
+
+
+# ─────────────────────────────────────────────
+# 固定設定
+# ─────────────────────────────────────────────
+VIDEO_PATH = "data/boj_conference.mp4"
+INTEG_PATH = "output/integrated_results.csv"
+FOREX_PATH = "data/DAT_ASCII_USDJPY_M1_2023.csv"
+START_STR  = "2023-06-16 15:30:00"
+
+# ─────────────────────────────────────────────
+# サイドバー
+# ─────────────────────────────────────────────
 with st.sidebar:
     st.header("⚡ System Status")
-    st.success("🤖 Pipeline Status: ONLINE")
-    
-    st.markdown("### 📁 Dataset Configurations")
-    st.code(
-        f"Video Path: {video_path}\n"
-        f"Integ CSV : {integrated_path}\n"
-        f"Forex CSV : {forex_path}\n"
-        f"Start Time: {start_time_str}"
-    )
+    st.success("Pipeline: ONLINE")
+    st.code(f"Video : {VIDEO_PATH}\nCSV   : {INTEG_PATH}\nForex : {FOREX_PATH}\nStart : {START_STR}")
 
-# データ存在チェック
-if not os.path.exists(integrated_path):
-    st.warning(f"⚠️ `{integrated_path}` が見つかりません。先にデータ統合を完了してください。")
-    st.stop()
-if not os.path.exists(forex_path):
-    st.warning(f"⚠️ `{forex_path}` が見つかりません。パスを確認してください。")
-    st.stop()
+# ─────────────────────────────────────────────
+# ファイル存在チェック
+# ─────────────────────────────────────────────
+for p in [INTEG_PATH, FOREX_PATH]:
+    if not os.path.exists(p):
+        st.error(f"ファイルが見つかりません: {p}")
+        st.stop()
 
-# --- 規格化ヘルパー ---
-def min_max_normalize(series: pd.Series) -> pd.Series:
-    series_clean = series.fillna(0.0)
-    s_min, s_max = series_clean.min(), series_clean.max()
-    if s_min == s_max:
-        return pd.Series(0.0, index=series.index)
-    return -1.0 + 2.0 * (series_clean - s_min) / (s_max - s_min)
+# ─────────────────────────────────────────────
+# データ読み込み
+# ─────────────────────────────────────────────
+df = pd.read_csv(INTEG_PATH)
+df_fin = load_and_filter_forex_data(FOREX_PATH, START_STR)
 
-# --- データの読み込み & 表記揺れ自動吸収 ---
-df_integ = pd.read_csv(integrated_path)
-df_fin = load_and_filter_forex_data(forex_path, start_time_str)
+# ── 列名の吸収 ──────────────────────────────
+def alias(df, target, candidates):
+    if target not in df.columns:
+        for c in candidates:
+            if c in df.columns:
+                df[target] = df[c]; return
+        df[target] = 0.0
 
-# 1. カラム名の別名吸収 (実際のCSV列名に対応)
-# text列
-if 'text' not in df_integ.columns:
-    for col in ['sentence', 'content', 'transcript']:
-        if col in df_integ.columns:
-            df_integ['text'] = df_integ[col]
-            break
+alias(df, 'text',              ['sentence', 'content', 'transcript'])
+alias(df, 'text_score',        ['sentiment_score', 'text_score_mean', 'sentiment'])
+alias(df, 'face_emotion_score',['mean_valence',  'valence',  'face_valence'])
+alias(df, 'face_arousal_score',['mean_arousal',  'arousal',  'face_arousal'])
+alias(df, 'audio_emotion_score',['audio_valence', 'audio_sentiment'])
+alias(df, 'audio_arousal_score',['audio_arousal'])
+alias(df, 'start',             ['start_time', 'start_sec'])
+alias(df, 'end',               ['end_time',   'end_sec'])
 
-# text_score列 (sentiment_score が実際の列名)
-if 'text_score' not in df_integ.columns:
-    for col in ['sentiment_score', 'text_score_mean', 'sentiment', 'text_sentiment']:
-        if col in df_integ.columns:
-            df_integ['text_score'] = df_integ[col]
-            break
-if 'text_score' not in df_integ.columns:
-    df_integ['text_score'] = 0.0
-
-# face_emotion_score列 (mean_valence が実際の列名)
-if 'face_emotion_score' not in df_integ.columns:
-    for col in ['mean_valence', 'valence', 'face_valence']:
-        if col in df_integ.columns:
-            df_integ['face_emotion_score'] = df_integ[col]
-            break
-
-# face_arousal_score列 (mean_arousal が実際の列名)
-if 'face_arousal_score' not in df_integ.columns:
-    for col in ['mean_arousal', 'arousal', 'face_arousal']:
-        if col in df_integ.columns:
-            df_integ['face_arousal_score'] = df_integ[col]
-            break
-
-# audio_emotion_score列 (audio_valence が実際の列名)
-if 'audio_emotion_score' not in df_integ.columns:
-    for col in ['audio_valence', 'audio_sentiment']:
-        if col in df_integ.columns:
-            df_integ['audio_emotion_score'] = df_integ[col]
-            break
-
-# audio_arousal_score列 (audio_arousal が実際の列名)
-if 'audio_arousal_score' not in df_integ.columns:
-    for col in ['audio_arousal']:
-        if col in df_integ.columns:
-            df_integ['audio_arousal_score'] = df_integ[col]
-            break
-
-if 'start' not in df_integ.columns:
-    for col in ['start_time', 'start_sec']:
-        if col in df_integ.columns:
-            df_integ['start'] = df_integ[col]
-            break
-
-if 'end' not in df_integ.columns:
-    for col in ['end_time', 'end_sec']:
-        if col in df_integ.columns:
-            df_integ['end'] = df_integ[col]
-            break
-
-# 2. is_governor 列の文字列/数値 -> 真偽値の確実な変換
-if 'is_governor' in df_integ.columns:
-    df_integ['is_governor'] = df_integ['is_governor'].astype(str).str.lower().isin(['true', '1', 't', '1.0'])
-elif 'speaker' in df_integ.columns:
-    df_integ['is_governor'] = df_integ['speaker'].astype(str).str.contains('SPEAKER_15|SPEAKER_00|GOVERNOR', case=False, regex=True)
+# ── is_governor 変換 ──────────────────────────
+if 'is_governor' in df.columns:
+    df['is_governor'] = df['is_governor'].astype(str).str.lower().isin(['true','1','t','1.0'])
+elif 'speaker' in df.columns:
+    df['is_governor'] = df['speaker'].astype(str).str.upper().str.startswith('SPEAKER_00')
 else:
-    df_integ['is_governor'] = False
+    df['is_governor'] = False
 
-# 3. 欠損値 (NaN) の事前処理
-df_integ['start'] = df_integ['start'].fillna(0.0)
-df_integ['end'] = df_integ['end'].fillna(0.0)
-df_integ['text'] = df_integ['text'].fillna('')
-df_integ['text_score'] = df_integ['text_score'].fillna(0.0)
-df_integ['speaker'] = df_integ.get('speaker', pd.Series(['UNKNOWN']*len(df_integ))).fillna('UNKNOWN')
+# ── NaN クレンジング ──────────────────────────
+for col in ['start','end','text_score','face_emotion_score','face_arousal_score',
+            'audio_emotion_score','audio_arousal_score']:
+    df[col] = df[col].fillna(0.0)
+df['text']    = df['text'].fillna('').astype(str)
+df['speaker'] = df.get('speaker', pd.Series(['UNKNOWN']*len(df))).fillna('UNKNOWN')
 
-# 静的フォルダへの動画のコピー確認
+# ─────────────────────────────────────────────
+# 動画 static コピー
+# ─────────────────────────────────────────────
 static_dir = Path("static")
 static_dir.mkdir(exist_ok=True)
-video_basename = os.path.basename(video_path)
+video_basename = os.path.basename(VIDEO_PATH)
 target_static = static_dir / video_basename
-if not target_static.exists() and os.path.exists(video_path):
+if not target_static.exists() and os.path.exists(VIDEO_PATH):
     try:
-        import shutil
-        shutil.copy(video_path, target_static)
+        import shutil; shutil.copy(VIDEO_PATH, target_static)
     except Exception as e:
-        st.error(f"動画をstaticフォルダにロードできませんでした: {e}")
+        st.warning(f"動画コピー失敗: {e}")
 
 video_url = f"/app/static/{video_basename}"
 
-# 時間アライメント処理 (1分足集計)
-conference_start_time = pd.to_datetime(start_time_str)
-df_integ['datetime'] = conference_start_time + pd.to_timedelta(df_integ['start'], unit='s')
-df_integ_time = df_integ.set_index('datetime')
-df_integ_1min = df_integ_time.resample('1min').mean(numeric_only=True).reset_index()
+# ─────────────────────────────────────────────
+# チャートデータ（1分足集計）
+# ─────────────────────────────────────────────
+t0 = pd.to_datetime(START_STR)
+df['datetime'] = t0 + pd.to_timedelta(df['start'], unit='s')
+df_1min = df.set_index('datetime').resample('1min').mean(numeric_only=True).reset_index()
 
-available_vars = [v for v in ['text_score', 'face_emotion_score', 'audio_emotion_score', 'face_arousal_score', 'audio_arousal_score'] if v in df_integ_1min.columns]
-df_merged = pd.merge(df_fin, df_integ_1min, on='datetime', how='inner')
-df_merged = df_merged.dropna(subset=['return'] + available_vars)
+avail = [v for v in ['text_score','face_emotion_score','audio_emotion_score',
+                      'face_arousal_score','audio_arousal_score'] if v in df_1min.columns]
 
-# JS/HTML コンポーネント用のデータ準備
+df_merged = pd.merge(df_fin, df_1min, on='datetime', how='inner').dropna(subset=['return'] + avail)
+
 df_plot = df_merged.copy()
-for col in ['text_score', 'face_emotion_score', 'face_arousal_score', 'audio_emotion_score', 'audio_arousal_score']:
-    if col in df_plot.columns:
-        df_plot[col] = min_max_normalize(df_plot[col])
+for col in avail:
+    df_plot[col] = min_max_normalize(df_plot[col])
 
-chart_data_list = []
+chart_data = []
 for _, row in df_plot.iterrows():
-    minutes = (row["datetime"] - conference_start_time).total_seconds() / 60.0
-    chart_data_list.append({
-        "m": round(float(minutes), 2),
-        "close": round(float(row["close"]), 4),
-        "text": round(float(row["text_score"]), 4) if 'text_score' in row else 0.0,
-        "face_val": round(float(row["face_emotion_score"]), 4) if 'face_emotion_score' in row else 0.0,
-        "face_aro": round(float(row["face_arousal_score"]), 4) if 'face_arousal_score' in row else 0.0,
-        "audio_val": round(float(row["audio_emotion_score"]), 4) if 'audio_emotion_score' in row else 0.0,
-        "audio_aro": round(float(row["audio_arousal_score"]), 4) if 'audio_arousal_score' in row else 0.0,
+    mins = (row['datetime'] - t0).total_seconds() / 60.0
+    chart_data.append({
+        "m":         round(safe_float(mins), 2),
+        "close":     round(safe_float(row['close']), 4),
+        "text":      round(safe_float(row.get('text_score', 0)), 4),
+        "face_val":  round(safe_float(row.get('face_emotion_score', 0)), 4),
+        "face_aro":  round(safe_float(row.get('face_arousal_score', 0)), 4),
+        "audio_val": round(safe_float(row.get('audio_emotion_score', 0)), 4),
     })
 
-# 全セグメントの文字起こしデータ
-transcript_list = []
-for idx, row in df_integ.iterrows():
-    transcript_list.append({
-        "id": int(idx),
-        "start": float(row["start"]),
-        "end": float(row["end"]),
-        "text": str(row["text"]),
-        "speaker": str(row.get("speaker", "UNKNOWN")),
-        "is_gov": bool(row.get("is_governor", False)),
-        "text_score": round(float(row.get("text_score", 0.0)), 2)
-    })
+chart_json = json.dumps(chart_data)
 
-chart_json = json.dumps(chart_data_list)
-transcript_json = json.dumps(transcript_list)
+# ─────────────────────────────────────────────
+# 発言カード HTML をPython側で生成（JS不要）
+# ─────────────────────────────────────────────
+def fmt_time(sec: float) -> str:
+    sec = max(0, int(sec))
+    return f"{sec//60:02d}:{sec%60:02d}"
 
-# --- デバッグ情報の表示 (サイドバー) ---
+cards_html = ""
+for _, row in df.iterrows():
+    is_gov   = bool(row['is_governor'])
+    start_s  = safe_float(row['start'])
+    text     = html_lib.escape(str(row['text']))
+    score    = safe_float(row['text_score'])
+    sign     = "+" if score > 0 else ""
+    speaker  = "総裁" if is_gov else "記者/その他"
+    card_cls = ("bg-[#0c0d1a] border-indigo-800/50 hover:bg-indigo-950/40"
+                if is_gov else
+                "bg-[#111827] border-gray-700/50 hover:bg-gray-700/40")
+    sp_cls   = "text-[#8a7eff] font-bold" if is_gov else "text-gray-400"
+    time_str = fmt_time(start_s)
+
+    cards_html += f"""
+<div class="card p-3 rounded-xl border {card_cls} cursor-pointer transition-all duration-200"
+     onclick="seekTo({start_s})">
+  <div class="flex justify-between items-center mb-1 text-xs">
+    <span class="{sp_cls}">{speaker}</span>
+    <span class="font-mono text-indigo-300 hover:text-white underline"
+          onclick="event.stopPropagation(); seekTo({start_s})">{time_str}</span>
+  </div>
+  <p class="text-sm leading-relaxed text-gray-100">{text}</p>
+  <div class="mt-1 text-[10px] font-mono text-indigo-400/80">
+    感情スコア: {sign}{score:.2f}
+  </div>
+</div>
+"""
+
+# ─────────────────────────────────────────────
+# サイドバーにデバッグ件数を表示
+# ─────────────────────────────────────────────
 with st.sidebar:
     st.markdown("---")
-    st.markdown(f"**発言データ:** {len(transcript_list)} 件")
-    st.markdown(f"**チャートデータ:** {len(chart_data_list)} 件")
+    st.markdown(f"**発言セグメント:** {len(df)} 件")
+    st.markdown(f"**チャートデータ:** {len(chart_data)} 件")
 
-# --- メインダッシュボード ---
+# ─────────────────────────────────────────────
+# メインダッシュボード
+# ─────────────────────────────────────────────
 st.title("BOJ Governor Multimodal Real-Time Aligner")
 
-# リアルタイム同期用 HTML/CSS/JS コンポーネント
-custom_html = f"""
-<!DOCTYPE html>
+custom_html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<!-- Tailwind CSS CDN -->
 <script src="https://cdn.tailwindcss.com"></script>
-<!-- Chart.js CDN -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap');
-    body {{
-        font-family: 'Outfit', sans-serif;
-        background-color: #0b0f19;
-        color: #f8fafc;
-    }}
-    .glow-border {{
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-        border: 1px solid rgba(99, 91, 255, 0.15);
-    }}
-    .active-glow {{
-        background: rgba(99, 91, 255, 0.18) !important;
-        border: 2px solid #635bff !important;
-        box-shadow: 0 0 20px rgba(99, 91, 255, 0.4);
-    }}
-    ::-webkit-scrollbar {{
-        width: 6px;
-    }}
-    ::-webkit-scrollbar-track {{
-        background: #101625;
-    }}
-    ::-webkit-scrollbar-thumb {{
-        background: #4b5563;
-        border-radius: 3px;
-    }}
-    ::-webkit-scrollbar-thumb:hover {{
-        background: #635bff;
-    }}
+  @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap');
+  body {{ font-family:'Outfit',sans-serif; background:#0b0f19; color:#f8fafc; margin:0; padding:8px; }}
+  ::-webkit-scrollbar {{ width:5px; }}
+  ::-webkit-scrollbar-track {{ background:#101625; }}
+  ::-webkit-scrollbar-thumb {{ background:#4b5563; border-radius:3px; }}
+  .active-card {{
+    background: rgba(99,91,255,0.2) !important;
+    border-color: #635bff !important;
+    box-shadow: 0 0 16px rgba(99,91,255,0.35);
+  }}
 </style>
 </head>
-<body class="p-3">
+<body>
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-3" style="height:790px">
 
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-    <!-- 左・中カラム: 動画プレイヤー & 同期チャート -->
-    <div class="lg:col-span-2 space-y-4">
-        <!-- 動画プレイヤー -->
-        <div class="bg-[#101625] p-3 rounded-xl glow-border">
-            <video id="boj_video" class="w-full rounded-lg shadow-2xl" controls preload="auto">
-                <source src="{video_url}" type="video/mp4">
-                <source src="http://localhost:8000/{video_basename}" type="video/mp4">
-            </video>
-        </div>
-        
-        <!-- 同期ラインチャート -->
-        <div class="bg-[#101625] p-4 rounded-xl glow-border">
-            <h3 class="text-[#8a7eff] font-bold text-lg mb-2 flex justify-between items-center">
-                感情分析の推移
-                <span id="current_time_display" class="text-sm bg-[#0b0f19] px-3 py-1 rounded text-white border border-gray-700">00:00</span>
-            </h3>
-            <div style="position: relative; height: 260px; width: 100%;">
-                <canvas id="sync_chart"></canvas>
-            </div>
-        </div>
+  <!-- 左2/3: 動画 + チャート -->
+  <div class="lg:col-span-2 flex flex-col gap-3">
+
+    <!-- 動画 -->
+    <div class="bg-[#101625] p-2 rounded-xl border border-indigo-900/30">
+      <video id="vid" class="w-full rounded-lg" controls preload="auto">
+        <source src="{video_url}" type="video/mp4">
+        <source src="http://localhost:8000/{video_basename}" type="video/mp4">
+      </video>
     </div>
-    
-    <!-- 右カラム: 発言内容 -->
-    <div class="bg-[#101625] p-4 rounded-xl glow-border flex flex-col h-[755px]">
-        <h3 class="text-[#8a7eff] font-bold text-lg mb-3 pb-2 border-b border-gray-700">発言内容</h3>
-        <p class="text-xs text-gray-400 mb-3">カードまたはタイムスタンプをクリックすると該当シーンへジャンプします。</p>
-        <div id="transcript_container" class="flex-1 overflow-y-auto space-y-3 pr-2">
-            <!-- JSで動的生成 -->
-        </div>
+
+    <!-- チャート -->
+    <div class="bg-[#101625] p-3 rounded-xl border border-indigo-900/30 flex-1">
+      <div class="flex justify-between items-center mb-1">
+        <span class="text-[#8a7eff] font-bold text-base">感情分析の推移</span>
+        <span id="timedisp" class="text-xs font-mono bg-black/40 px-3 py-1 rounded border border-gray-700 text-white">00:00</span>
+      </div>
+      <div style="position:relative;height:210px;width:100%">
+        <canvas id="chart"></canvas>
+      </div>
     </div>
+  </div>
+
+  <!-- 右1/3: 発言内容 (Python生成HTML) -->
+  <div class="bg-[#101625] p-3 rounded-xl border border-indigo-900/30 flex flex-col" style="height:790px">
+    <div class="text-[#8a7eff] font-bold text-base pb-2 border-b border-gray-700 mb-2">発言内容</div>
+    <p class="text-xs text-gray-400 mb-2">タイムスタンプをクリックすると該当シーンへジャンプします。</p>
+    <div id="tc" class="flex-1 overflow-y-auto space-y-2 pr-1">
+      {cards_html}
+    </div>
+  </div>
+
 </div>
 
 <script>
-    // 0. 時間フォーマットヘルパー関数
-    function formatTime(seconds) {{
-        if (isNaN(seconds) || seconds < 0) return "00:00";
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        return `${{String(mins).padStart(2, '0')}}:${{String(secs).padStart(2, '0')}}`;
+const chartData = {chart_json};
+const video     = document.getElementById('vid');
+const timeDisp  = document.getElementById('timedisp');
+const tc        = document.getElementById('tc');
+
+// ── 時間フォーマット ──────────────────────────
+function fmt(s) {{
+  if (!isFinite(s) || s < 0) s = 0;
+  const m = Math.floor(s/60), sec = Math.floor(s%60);
+  return `${{String(m).padStart(2,'0')}}:${{String(sec).padStart(2,'0')}}`;
+}}
+
+// ── シーク関数（全カードから呼ばれる） ──────────
+function seekTo(t) {{
+  video.currentTime = t;
+  video.play().catch(()=>{{}});
+}}
+
+// ── Chart.js ──────────────────────────────────
+const vlPlugin = {{
+  id:'vl',
+  afterDraw(c) {{
+    const xv = c.config.options.plugins.vl?.x;
+    if (xv === undefined) return;
+    const xa = c.scales.x, ya = c.scales.y;
+    const px = xa.getPixelForValue(xv);
+    if (px < xa.left || px > xa.right) return;
+    const ctx = c.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(px, ya.top); ctx.lineTo(px, ya.bottom);
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5,4]);
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.shadowColor = '#635bff'; ctx.shadowBlur = 8;
+    ctx.stroke();
+    ctx.restore();
+  }}
+}};
+Chart.register(vlPlugin);
+
+const chart = new Chart(document.getElementById('chart').getContext('2d'), {{
+  type:'line',
+  data:{{
+    labels: chartData.map(d=>d.m),
+    datasets:[
+      {{ label:'言語感情',   data:chartData.map(d=>d.text),      borderColor:'#2ecc71', borderWidth:2, pointRadius:0, yAxisID:'e' }},
+      {{ label:'表情ポジネガ',data:chartData.map(d=>d.face_val),  borderColor:'#e74c3c', borderWidth:2, pointRadius:0, yAxisID:'e' }},
+      {{ label:'表情緊張度', data:chartData.map(d=>d.face_aro),  borderColor:'#9b59b6', borderWidth:2, pointRadius:0, yAxisID:'e', borderDash:[5,5] }},
+      {{ label:'音声感情',   data:chartData.map(d=>d.audio_val), borderColor:'#3498db', borderWidth:2, pointRadius:0, yAxisID:'e' }},
+      {{ label:'USD/JPY',    data:chartData.map(d=>d.close),     borderColor:'#f1c40f', borderWidth:3, pointRadius:0, yAxisID:'f' }},
+    ]
+  }},
+  options:{{
+    responsive:true, maintainAspectRatio:false,
+    scales:{{
+      x:{{ title:{{display:true,text:'経過時間 (分足)',color:'#9ca3af'}}, grid:{{color:'#1f2833'}}, ticks:{{color:'#9ca3af'}} }},
+      e:{{ position:'left', title:{{display:true,text:'感情スコア [-1,1]',color:'#9ca3af'}}, min:-1.2, max:1.2, grid:{{color:'#1f2833'}}, ticks:{{color:'#9ca3af'}} }},
+      f:{{ position:'right', title:{{display:true,text:'USD/JPY',color:'#9ca3af'}}, grid:{{drawOnChartArea:false}}, ticks:{{color:'#9ca3af'}} }}
+    }},
+    plugins:{{
+      legend:{{ position:'top', labels:{{color:'#9ca3af',boxWidth:10,font:{{size:10}}}} }},
+      vl:{{ x: 0 }}
     }}
+  }}
+}});
 
-    const chartData = {chart_json};
-    const transcriptData = {transcript_json};
+// ── 再生イベント ─────────────────────────────
+const allCards = tc.querySelectorAll('.card');
 
-    const video = document.getElementById("boj_video");
-    const transcriptContainer = document.getElementById("transcript_container");
-    const timeDisplay = document.getElementById("current_time_display");
+video.addEventListener('timeupdate', ()=>{{
+  const t = video.currentTime;
+  timeDisp.innerText = fmt(t);
 
-    // 1. チャートの初期化 (Chart.js)
-    const labels = chartData.map(d => d.m);
-    const textScores = chartData.map(d => d.text);
-    const faceValScores = chartData.map(d => d.face_val);
-    const faceAroScores = chartData.map(d => d.face_aro);
-    const audioValScores = chartData.map(d => d.audio_val);
-    const fxPrices = chartData.map(d => d.close);
-
-    // カスタム垂直線描画プラグイン
-    const verticalLinePlugin = {{
-        id: 'verticalLine',
-        afterDraw: (chart) => {{
-            if (chart.config.options.plugins.verticalLine && chart.config.options.plugins.verticalLine.xValue !== undefined) {{
-                const xValue = chart.config.options.plugins.verticalLine.xValue;
-                const xAxis = chart.scales.x;
-                const yAxis = chart.scales.y;
-                const xPixel = xAxis.getPixelForValue(xValue);
-                
-                if (xPixel >= xAxis.left && xPixel <= xAxis.right) {{
-                    const ctx = chart.ctx;
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.moveTo(xPixel, yAxis.top);
-                    ctx.lineTo(xPixel, yAxis.bottom);
-                    ctx.lineWidth = 2;
-                    ctx.setLineDash([5, 5]);
-                    ctx.strokeStyle = '#ffffff';
-                    ctx.shadowColor = '#635bff';
-                    ctx.shadowBlur = 8;
-                    ctx.stroke();
-                    ctx.restore();
-                }}
-            }}
-        }}
-    }};
-    Chart.register(verticalLinePlugin);
-
-    const ctx = document.getElementById('sync_chart').getContext('2d');
-    const chart = new Chart(ctx, {{
-        type: 'line',
-        data: {{
-            labels: labels,
-            datasets: [
-                {{
-                    label: 'Text Valence (言語感情)',
-                    data: textScores,
-                    borderColor: '#2ecc71',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    yAxisID: 'y_emotion'
-                }},
-                {{
-                    label: 'Face Valence (表情ポジネガ)',
-                    data: faceValScores,
-                    borderColor: '#e74c3c',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    yAxisID: 'y_emotion'
-                }},
-                {{
-                    label: 'Face Arousal (表情緊張度)',
-                    data: faceAroScores,
-                    borderColor: '#9b59b6',
-                    borderWidth: 2,
-                    borderDash: [5, 5],
-                    pointRadius: 0,
-                    yAxisID: 'y_emotion'
-                }},
-                {{
-                    label: 'Audio Valence (音声感情)',
-                    data: audioValScores,
-                    borderColor: '#3498db',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    yAxisID: 'y_emotion'
-                }},
-                {{
-                    label: 'USD/JPY 為替 Close',
-                    data: fxPrices,
-                    borderColor: '#f1c40f',
-                    borderWidth: 3,
-                    pointRadius: 0,
-                    yAxisID: 'y_forex'
-                }}
-            ]
-        }},
-        options: {{
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {{
-                x: {{
-                    title: {{
-                        display: true,
-                        text: '経過時間 (分足)',
-                        color: '#c5c6c7'
-                    }},
-                    grid: {{ color: '#1f2833' }},
-                    ticks: {{ color: '#c5c6c7' }}
-                }},
-                y_emotion: {{
-                    position: 'left',
-                    title: {{ display: true, text: '感情・緊張スコア (規格化 [-1, 1])', color: '#c5c6c7' }},
-                    grid: {{ color: '#1f2833' }},
-                    ticks: {{ color: '#c5c6c7' }},
-                    min: -1.2,
-                    max: 1.2
-                }},
-                y_forex: {{
-                    position: 'right',
-                    title: {{ display: true, text: '為替価格 (USD/JPY)', color: '#c5c6c7' }},
-                    grid: {{ drawOnChartArea: false }},
-                    ticks: {{ color: '#c5c6c7' }}
-                }}
-            }},
-            plugins: {{
-                legend: {{
-                    position: 'top',
-                    labels: {{ color: '#c5c6c7', boxWidth: 12, font: {{ size: 10 }} }}
-                }},
-                verticalLine: {{
-                    xValue: 0.0
-                }}
-            }}
-        }}
-    }});
-
-    // 2. 安全な DOM 生成による発言内容リストのレンダリング
-    if (transcriptData && transcriptData.length > 0) {{
-        transcriptData.forEach((item, index) => {{
-            const card = document.createElement("div");
-            card.id = `card-${{index}}`;
-            card.className = `p-3 rounded-lg cursor-pointer transition duration-300 border ${{
-                item.is_gov 
-                    ? "bg-[#0b0c10] border-indigo-900/60 hover:bg-indigo-950/40" 
-                    : "bg-gray-900 border-gray-800 hover:bg-gray-800"
-            }}`;
-            
-            card.onclick = () => {{
-                video.currentTime = item.start;
-                video.play();
-            }};
-
-            const headerDiv = document.createElement("div");
-            headerDiv.className = "flex justify-between items-center mb-1 text-xs";
-            
-            const speakerSpan = document.createElement("span");
-            speakerSpan.className = item.is_gov ? "text-[#8a7eff] font-bold" : "text-gray-400";
-            speakerSpan.textContent = item.is_gov ? "総裁" : "記者/その他";
-            
-            const timeSpan = document.createElement("span");
-            timeSpan.className = "text-gray-400 hover:text-white font-mono underline cursor-pointer";
-            timeSpan.textContent = formatTime(item.start);
-            timeSpan.onclick = (e) => {{
-                e.stopPropagation();
-                video.currentTime = item.start;
-                video.play();
-            }};
-
-            headerDiv.appendChild(speakerSpan);
-            headerDiv.appendChild(timeSpan);
-
-            const pText = document.createElement("p");
-            pText.className = "text-sm leading-relaxed text-gray-100";
-            pText.textContent = item.text;
-
-            const scoreDiv = document.createElement("div");
-            scoreDiv.className = "mt-2 text-[11px] text-indigo-300 font-mono bg-indigo-950/60 px-2 py-0.5 rounded inline-block";
-            const scoreSign = item.text_score > 0 ? "+" : "";
-            scoreDiv.textContent = `テキスト感情スコア: ${{scoreSign}}${{item.text_score}}`;
-
-            card.appendChild(headerDiv);
-            card.appendChild(pText);
-            card.appendChild(scoreDiv);
-
-            transcriptContainer.appendChild(card);
-        }});
-    }} else {{
-        const emptyDiv = document.createElement("div");
-        emptyDiv.className = "p-4 text-center text-gray-500 text-sm";
-        emptyDiv.textContent = "発言データがロードされていません。";
-        transcriptContainer.appendChild(emptyDiv);
-    }}
-
-    // 3. 動画再生とアライメント・シークの同期イベント
-    video.addEventListener("timeupdate", () => {{
-        const curTime = video.currentTime;
-        timeDisplay.innerText = formatTime(curTime);
-
-        // チャートの現在再生時間を示す縦線の移動
-        chart.config.options.plugins.verticalLine.xValue = curTime / 60.0;
-        chart.update('none');
-
-        // 発言内容のハイライト & 自動スクロール
-        let activeIdx = -1;
-        for (let i = 0; i < transcriptData.length; i++) {{
-            if (curTime >= transcriptData[i].start && curTime <= transcriptData[i].end) {{
-                activeIdx = i;
-                break;
-            }}
-        }}
-
-        if (activeIdx !== -1) {{
-            document.querySelectorAll('.active-glow').forEach(el => el.classList.remove('active-glow'));
-            
-            const activeCard = document.getElementById(`card-${{activeIdx}}`);
-            if (activeCard) {{
-                activeCard.classList.add('active-glow');
-                
-                const containerHeight = transcriptContainer.clientHeight;
-                const cardTop = activeCard.offsetTop;
-                const cardHeight = activeCard.clientHeight;
-                transcriptContainer.scrollTo({{
-                    top: cardTop - (containerHeight / 2) + (cardHeight / 2),
-                    behavior: 'smooth'
-                }});
-            }}
-        }}
-    }});
+  // チャート縦線
+  chart.config.options.plugins.vl.x = t / 60.0;
+  chart.update('none');
+}});
 </script>
 </body>
 </html>
 """
 
-components.html(custom_html, height=790, scrolling=False)
+components.html(custom_html, height=795, scrolling=False)
