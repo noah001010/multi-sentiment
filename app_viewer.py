@@ -17,37 +17,43 @@ st.set_page_config(
     page_icon="🤖"
 )
 
-# ガラスモーフィズムとダークネオンスタイルの適用
+# ガラスモーフィズムとStripe/OpenAI調のプレミアムスタイルの適用
 st.markdown("""
 <style>
     /* 全体背景 */
     .stApp {
-        background-color: #0b0c10;
-        color: #c5c6c7;
+        background-color: #0b0f19;
+        color: #f8fafc;
     }
     
-    /* サイドバー */
+    /* サイドバーの背景とテキスト色（高コントラスト化） */
     [data-testid="stSidebar"] {
-        background-color: #1f2833;
-        border-right: 1px solid #bd00ff;
+        background-color: #0f172a !important;
+        border-right: 1px solid rgba(99, 91, 255, 0.3) !important;
+    }
+    [data-testid="stSidebar"] * {
+        color: #f8fafc !important;
     }
     
-    /* 見出しとテキスト */
+    /* 有名テック企業のような美しいグラデーション見出し */
     h1, h2, h3 {
-        color: #bd00ff !important;
+        background: linear-gradient(135deg, #635bff 0%, #a388ff 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
         font-family: 'Outfit', 'Inter', sans-serif;
         font-weight: 700;
-        text-shadow: 0 0 10px rgba(189, 0, 255, 0.3);
+        text-shadow: 0 4px 12px rgba(99, 91, 255, 0.15);
     }
     
-    /* カード */
+    /* ガラスモーフカード */
     .metric-card {
-        background: rgba(31, 40, 51, 0.45);
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(189, 0, 255, 0.2);
+        background: rgba(18, 24, 38, 0.6);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(99, 91, 255, 0.15);
         padding: 20px;
         border-radius: 12px;
         text-align: center;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -99,7 +105,7 @@ if not target_static.exists() and os.path.exists(video_path):
     except Exception as e:
         st.error(f"動画をstaticフォルダにロードできませんでした: {e}")
 
-video_url = f"/static/{video_basename}"
+video_url = f"/app/static/{video_basename}"
 
 # 時間アライメント処理 (回帰分析用)
 conference_start_time = pd.to_datetime(start_time_str)
@@ -171,31 +177,31 @@ custom_html = f"""
     @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap');
     body {{
         font-family: 'Outfit', sans-serif;
-        background-color: #0b0c10;
-        color: #c5c6c7;
+        background-color: #0b0f19;
+        color: #f8fafc;
     }}
     .glow-border {{
-        box-shadow: 0 0 15px rgba(189, 0, 255, 0.3);
-        border: 1px solid rgba(189, 0, 255, 0.4);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(99, 91, 255, 0.15);
     }}
     .active-glow {{
-        background: rgba(189, 0, 255, 0.15) !important;
-        border: 2px solid #bd00ff !important;
-        box-shadow: 0 0 20px rgba(189, 0, 255, 0.5);
+        background: rgba(99, 91, 255, 0.15) !important;
+        border: 2px solid #635bff !important;
+        box-shadow: 0 0 20px rgba(99, 91, 255, 0.4);
     }}
     /* スクロールバーのカスタマイズ */
     ::-webkit-scrollbar {{
         width: 6px;
     }}
     ::-webkit-scrollbar-track {{
-        background: #1f2833;
+        background: #101625;
     }}
     ::-webkit-scrollbar-thumb {{
-        background: #45f248;
+        background: #4b5563; /* grey thumb */
         border-radius: 3px;
     }}
     ::-webkit-scrollbar-thumb:hover {{
-        background: #bd00ff;
+        background: #635bff;
     }}
 </style>
 </head>
@@ -205,17 +211,17 @@ custom_html = f"""
     <!-- 左・中カラム: 動画プレイヤー & 同期チャート -->
     <div class="lg:col-span-2 space-y-4">
         <!-- 動画プレイヤー -->
-        <div class="bg-[#1f2833] p-3 rounded-xl glow-border">
+        <div class="bg-[#101625] p-3 rounded-xl glow-border">
             <video id="boj_video" class="w-full rounded-lg shadow-2xl" controls>
                 <source src="{video_url}" type="video/mp4">
             </video>
         </div>
         
         <!-- 同期ラインチャート -->
-        <div class="bg-[#1f2833] p-4 rounded-xl glow-border">
-            <h3 class="text-[#bd00ff] font-bold text-lg mb-2 flex justify-between items-center">
+        <div class="bg-[#101625] p-4 rounded-xl glow-border">
+            <h3 class="text-[#8a7eff] font-bold text-lg mb-2 flex justify-between items-center">
                 📊 マルチモーダル時系列アライメント
-                <span id="current_time_display" class="text-sm bg-[#0b0c10] px-3 py-1 rounded text-white border border-gray-700">Elapsed: 00:00</span>
+                <span id="current_time_display" class="text-sm bg-[#0b0f19] px-3 py-1 rounded text-white border border-gray-700">Elapsed: 00:00</span>
             </h3>
             <div style="position: relative; height: 260px; width: 100%;">
                 <canvas id="sync_chart"></canvas>
@@ -224,8 +230,8 @@ custom_html = f"""
     </div>
     
     <!-- 右カラム: リアルタイムスクロール文字起こし -->
-    <div class="bg-[#1f2833] p-4 rounded-xl glow-border flex flex-col h-[755px]">
-        <h3 class="text-[#bd00ff] font-bold text-lg mb-3 pb-2 border-b border-gray-700">💬 発話セグメント (Transcript)</h3>
+    <div class="bg-[#101625] p-4 rounded-xl glow-border flex flex-col h-[755px]">
+        <h3 class="text-[#8a7eff] font-bold text-lg mb-3 pb-2 border-b border-gray-700">💬 発話セグメント (Transcript)</h3>
         <p class="text-xs text-gray-400 mb-3">カードをクリックすると、動画の該当発話シーンへ直接ジャンプします。</p>
         <div id="transcript_container" class="flex-1 overflow-y-auto space-y-3 pr-2">
             <!-- JSで動的生成 -->
@@ -265,8 +271,8 @@ custom_html = f"""
                 ctx.moveTo(xPixel, yAxis.top);
                 ctx.lineTo(xPixel, yAxis.bottom);
                 ctx.lineWidth = 3;
-                ctx.strokeStyle = '#bd00ff'; // ネオンパープル
-                ctx.shadowColor = '#bd00ff';
+                ctx.strokeStyle = '#635bff'; // ストライプインディゴ
+                ctx.shadowColor = '#635bff';
                 ctx.shadowBlur = 8;
                 ctx.stroke();
                 ctx.restore();
@@ -381,7 +387,7 @@ custom_html = f"""
 
         card.innerHTML = `
             <div class="flex justify-between items-center mb-1 text-xs">
-                <span class="${{item.is_gov ? "text-[#bd00ff] font-bold" : "text-gray-400"}}">
+                <span class="${{item.is_gov ? "text-[#8a7eff] font-bold" : "text-gray-400"}}">
                     👤 ${{item.is_gov ? "総裁 (Governor)" : "記者/その他"}}
                 </span>
                 <span class="text-gray-500 font-mono">🕒 ${{formatTime(item.start)}}</span>
@@ -498,9 +504,9 @@ with col2:
             symmetric=False,
             array=forest_df["Upper"] - forest_df["Coef"],
             arrayminus=forest_df["Coef"] - forest_df["Lower"],
-            color="#bd00ff"
+            color="#635bff"
         ),
-        marker=dict(size=12, color="#bd00ff"),
+        marker=dict(size=12, color="#635bff"),
         name="Coefficient"
     ))
     fig_forest.add_shape(type="line", x0=0, y0=-0.5, x1=0, y1=len(forest_df)-0.5, line=dict(color="white", width=1, dash="dash"))
