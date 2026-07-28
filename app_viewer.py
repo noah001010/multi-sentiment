@@ -238,6 +238,7 @@ custom_html = f"""
         <div class="bg-[#101625] p-3 rounded-xl glow-border">
             <video id="boj_video" class="w-full rounded-lg shadow-2xl" controls>
                 <source src="{video_url}" type="video/mp4">
+                <source src="http://localhost:8000/{video_basename}" type="video/mp4">
             </video>
         </div>
         
