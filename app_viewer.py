@@ -108,17 +108,49 @@ def min_max_normalize(series: pd.Series) -> pd.Series:
 df_integ = pd.read_csv(integrated_path)
 df_fin = load_and_filter_forex_data(forex_path, start_time_str)
 
-# 1. カラム名の別名吸収 (互換性担保)
+# 1. カラム名の別名吸収 (実際のCSV列名に対応)
+# text列
 if 'text' not in df_integ.columns:
     for col in ['sentence', 'content', 'transcript']:
         if col in df_integ.columns:
             df_integ['text'] = df_integ[col]
             break
 
+# text_score列 (sentiment_score が実際の列名)
 if 'text_score' not in df_integ.columns:
-    for col in ['sentiment_score', 'sentiment', 'text_sentiment']:
+    for col in ['sentiment_score', 'text_score_mean', 'sentiment', 'text_sentiment']:
         if col in df_integ.columns:
             df_integ['text_score'] = df_integ[col]
+            break
+if 'text_score' not in df_integ.columns:
+    df_integ['text_score'] = 0.0
+
+# face_emotion_score列 (mean_valence が実際の列名)
+if 'face_emotion_score' not in df_integ.columns:
+    for col in ['mean_valence', 'valence', 'face_valence']:
+        if col in df_integ.columns:
+            df_integ['face_emotion_score'] = df_integ[col]
+            break
+
+# face_arousal_score列 (mean_arousal が実際の列名)
+if 'face_arousal_score' not in df_integ.columns:
+    for col in ['mean_arousal', 'arousal', 'face_arousal']:
+        if col in df_integ.columns:
+            df_integ['face_arousal_score'] = df_integ[col]
+            break
+
+# audio_emotion_score列 (audio_valence が実際の列名)
+if 'audio_emotion_score' not in df_integ.columns:
+    for col in ['audio_valence', 'audio_sentiment']:
+        if col in df_integ.columns:
+            df_integ['audio_emotion_score'] = df_integ[col]
+            break
+
+# audio_arousal_score列 (audio_arousal が実際の列名)
+if 'audio_arousal_score' not in df_integ.columns:
+    for col in ['audio_arousal']:
+        if col in df_integ.columns:
+            df_integ['audio_arousal_score'] = df_integ[col]
             break
 
 if 'start' not in df_integ.columns:
@@ -139,7 +171,7 @@ if 'is_governor' in df_integ.columns:
 elif 'speaker' in df_integ.columns:
     df_integ['is_governor'] = df_integ['speaker'].astype(str).str.contains('SPEAKER_15|SPEAKER_00|GOVERNOR', case=False, regex=True)
 else:
-    df_integ['is_governor'] = True
+    df_integ['is_governor'] = False
 
 # 3. 欠損値 (NaN) の事前処理
 df_integ['start'] = df_integ['start'].fillna(0.0)
@@ -206,6 +238,12 @@ for idx, row in df_integ.iterrows():
 
 chart_json = json.dumps(chart_data_list)
 transcript_json = json.dumps(transcript_list)
+
+# --- デバッグ情報の表示 (サイドバー) ---
+with st.sidebar:
+    st.markdown("---")
+    st.markdown(f"**発言データ:** {len(transcript_list)} 件")
+    st.markdown(f"**チャートデータ:** {len(chart_data_list)} 件")
 
 # --- メインダッシュボード ---
 st.title("BOJ Governor Multimodal Real-Time Aligner")
