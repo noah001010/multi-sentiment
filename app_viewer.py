@@ -165,7 +165,6 @@ for _, row in df_p.iterrows():
         "close":     round(safe_float(row['close']), 4),
         "text":      round(safe_float(row.get('text_score', 0)), 4),
         "face_val":  round(safe_float(row.get('face_emotion_score', 0)), 4),
-        "face_aro":  round(safe_float(row.get('face_arousal_score', 0)), 4),
         "audio_val": round(safe_float(row.get('audio_emotion_score', 0)), 4),
     })
 chart_json = json.dumps(chart_data)
@@ -224,15 +223,15 @@ body {{
 </style>
 </head>
 <body>
-<div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;height:788px">
+<div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;height:630px">
 
   <!-- 左: 動画 + 感情チャート + USD/JPYサブチャート -->
-  <div style="display:flex;flex-direction:column;gap:6px;height:788px;overflow:hidden">
+  <div style="display:flex;flex-direction:column;gap:6px;height:630px;overflow:hidden">
 
     <!-- 動画 (高さ固定) -->
     <div style="background:#101625;padding:6px;border-radius:12px;border:1px solid #1e1b4b;flex-shrink:0">
       <video id="vid" controls preload="metadata"
-             style="width:100%;max-height:205px;border-radius:8px;display:block">
+             style="width:100%;max-height:160px;border-radius:8px;display:block">
         <source src="http://localhost:8000/{video_basename}" type="video/mp4">
         <source src="/app/static/{video_basename}" type="video/mp4">
       </video>
@@ -250,16 +249,16 @@ body {{
     </div>
 
     <!-- USD/JPY サブチャート (下部固定) -->
-    <div style="background:#101625;padding:8px 12px 6px;border-radius:12px;border:1px solid #1e1b4b;flex-shrink:0;height:128px">
+    <div style="background:#101625;padding:8px 12px 6px;border-radius:12px;border:1px solid #1e1b4b;flex-shrink:0;height:100px">
       <div style="font-size:11px;color:#f1c40f;font-weight:bold;margin-bottom:3px">為替相場 USD/JPY</div>
-      <div style="height:95px;position:relative">
+      <div style="height:70px;position:relative">
         <canvas id="forexChart"></canvas>
       </div>
     </div>
   </div>
 
   <!-- 右: 発言内容 -->
-  <div style="background:#101625;padding:12px;border-radius:12px;border:1px solid #1e1b4b;display:flex;flex-direction:column;height:788px">
+  <div style="background:#101625;padding:12px;border-radius:12px;border:1px solid #1e1b4b;display:flex;flex-direction:column;height:630px">
     <div style="color:#8a7eff;font-weight:bold;font-size:14px;padding-bottom:8px;border-bottom:1px solid #374151;margin-bottom:8px;flex-shrink:0">発言内容</div>
     <p style="font-size:11px;color:#6b7280;margin:0 0 8px;flex-shrink:0">タイムスタンプをクリックすると該当シーンへジャンプします。</p>
     <div style="flex:1;overflow-y:auto;padding-right:4px">
@@ -332,14 +331,10 @@ function seekTo(t) {{
            data: chartData.map(function(d){{ return d.text; }}),
            borderColor:'#2ecc71', backgroundColor:'transparent',
            borderWidth:2, pointRadius:0, tension:0.3 }},
-        {{ label:'表情ポジネガ',
+        {{ label:'表情感情',
            data: chartData.map(function(d){{ return d.face_val; }}),
            borderColor:'#e74c3c', backgroundColor:'transparent',
            borderWidth:2, pointRadius:0, tension:0.3 }},
-        {{ label:'表情緊張度',
-           data: chartData.map(function(d){{ return d.face_aro; }}),
-           borderColor:'#9b59b6', backgroundColor:'transparent',
-           borderWidth:2, pointRadius:0, tension:0.3, borderDash:[5,5] }},
         {{ label:'音声感情',
            data: chartData.map(function(d){{ return d.audio_val; }}),
            borderColor:'#3498db', backgroundColor:'transparent',
@@ -418,4 +413,4 @@ function seekTo(t) {{
 </html>
 """
 
-components.html(custom_html, height=795, scrolling=False)
+components.html(custom_html, height=640, scrolling=False)
