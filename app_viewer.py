@@ -9,7 +9,7 @@ from pathlib import Path
 import streamlit.components.v1 as components
 
 # --- ページ設定 ---
-st.set_page_config(page_title="BOJ Multimodal Sentiment Dashboard", layout="wide")
+st.set_page_config(page_title="日銀総裁会見 マルチモーダル感情分析", layout="wide")
 
 st.markdown("""
 <style>
@@ -81,9 +81,9 @@ def get_chartjs_script():
                 "https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js",
                 str(CHARTJS_PATH)
             )
-        except Exception as e:
-            return f'<script src="https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js"></script>'
-    
+        except Exception:
+            return '<script src="https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.min.js"></script>'
+
     if CHARTJS_PATH.exists():
         content = CHARTJS_PATH.read_text(encoding='utf-8')
         return f"<script>{content}</script>"
@@ -136,18 +136,17 @@ else:
 for col in ['start','end','text_score','face_emotion_score','face_arousal_score',
             'audio_emotion_score','audio_arousal_score']:
     df[col] = df[col].fillna(0.0)
-df['text']    = df['text'].fillna('').astype(str)
+df['text'] = df['text'].fillna('').astype(str)
 
 # ── 動画 ──
 video_basename = os.path.basename(VIDEO_PATH)
-# 動画をstaticにコピー（app/static/からも取得できるようにする）
 video_static = STATIC_DIR / video_basename
 if not video_static.exists() and os.path.exists(VIDEO_PATH):
     import shutil
     shutil.copy(VIDEO_PATH, video_static)
 
 # ── チャートデータ（1分足） ──
-t0   = pd.to_datetime(START_STR)
+t0 = pd.to_datetime(START_STR)
 df['datetime'] = t0 + pd.to_timedelta(df['start'], unit='s')
 df_1min = df.set_index('datetime').resample('1min').mean(numeric_only=True).reset_index()
 
@@ -162,12 +161,12 @@ chart_data = []
 for _, row in df_p.iterrows():
     mins = (row['datetime'] - t0).total_seconds() / 60.0
     chart_data.append({
-        "m":        round(safe_float(mins), 2),
-        "close":    round(safe_float(row['close']), 4),
-        "text":     round(safe_float(row.get('text_score', 0)), 4),
-        "face_val": round(safe_float(row.get('face_emotion_score', 0)), 4),
-        "face_aro": round(safe_float(row.get('face_arousal_score', 0)), 4),
-        "audio_val":round(safe_float(row.get('audio_emotion_score', 0)), 4),
+        "m":         round(safe_float(mins), 2),
+        "close":     round(safe_float(row['close']), 4),
+        "text":      round(safe_float(row.get('text_score', 0)), 4),
+        "face_val":  round(safe_float(row.get('face_emotion_score', 0)), 4),
+        "face_aro":  round(safe_float(row.get('face_arousal_score', 0)), 4),
+        "audio_val": round(safe_float(row.get('audio_emotion_score', 0)), 4),
     })
 chart_json = json.dumps(chart_data)
 
@@ -205,24 +204,19 @@ with st.sidebar:
     chartjs_ok = "✅ ローカル" if CHARTJS_PATH.exists() else "⚠️ CDN"
     st.markdown(f"**Chart.js:** {chartjs_ok}")
 
-st.title("BOJ Governor Multimodal Real-Time Aligner")
+st.title("日銀総裁会見　マルチモーダル感情分析")
 
-# ── Chart.js をインライン埋め込み ──
-# Chart.jsのコンテンツを取得（インライン or CDN）
+# ── HTML ダッシュボード ──
 custom_html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<!-- Chart.js: ローカルファイルからインライン埋め込み (CDN依存なし) -->
 {chartjs_script}
 <style>
 body {{
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: #0b0f19;
-  color: #f8fafc;
-  margin: 0;
-  padding: 8px;
-  box-sizing: border-box;
+  background: #0b0f19; color: #f8fafc;
+  margin: 0; padding: 8px; box-sizing: border-box;
 }}
 ::-webkit-scrollbar {{ width: 5px; }}
 ::-webkit-scrollbar-track {{ background: #101625; }}
@@ -232,33 +226,42 @@ body {{
 <body>
 <div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;height:788px">
 
-  <!-- 左: 動画 + チャート -->
-  <div style="display:flex;flex-direction:column;gap:8px">
+  <!-- 左: 動画 + 感情チャート + USD/JPYサブチャート -->
+  <div style="display:flex;flex-direction:column;gap:6px;height:788px;overflow:hidden">
 
-    <!-- 動画 -->
-    <div style="background:#101625;padding:8px;border-radius:12px;border:1px solid #1e1b4b">
-      <video id="vid" controls preload="metadata" style="width:100%;border-radius:8px;display:block">
+    <!-- 動画 (高さ固定) -->
+    <div style="background:#101625;padding:6px;border-radius:12px;border:1px solid #1e1b4b;flex-shrink:0">
+      <video id="vid" controls preload="metadata"
+             style="width:100%;max-height:205px;border-radius:8px;display:block">
         <source src="http://localhost:8000/{video_basename}" type="video/mp4">
         <source src="/app/static/{video_basename}" type="video/mp4">
       </video>
     </div>
 
-    <!-- チャート -->
-    <div style="background:#101625;padding:12px;border-radius:12px;border:1px solid #1e1b4b;flex:1;display:flex;flex-direction:column">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <span style="color:#8a7eff;font-weight:bold;font-size:14px">感情分析の推移</span>
-        <span id="timedisp" style="font-family:monospace;font-size:12px;background:rgba(0,0,0,0.4);padding:4px 12px;border-radius:6px;border:1px solid #374151;color:#fff">00:00</span>
+    <!-- 感情分析チャート (残りスペースを占有) -->
+    <div style="background:#101625;padding:10px 12px 8px;border-radius:12px;border:1px solid #1e1b4b;flex:1;display:flex;flex-direction:column;min-height:0">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;flex-shrink:0">
+        <span style="color:#8a7eff;font-weight:bold;font-size:13px">感情分析の推移</span>
+        <span id="timedisp" style="font-family:monospace;font-size:12px;background:rgba(0,0,0,0.5);padding:3px 10px;border-radius:6px;border:1px solid #374151;color:#fff">00:00</span>
       </div>
-      <div style="position:relative;flex:1;min-height:180px">
-        <canvas id="chartCanvas" style="width:100%;height:100%"></canvas>
+      <div style="flex:1;min-height:0;position:relative">
+        <canvas id="sentChart"></canvas>
+      </div>
+    </div>
+
+    <!-- USD/JPY サブチャート (下部固定) -->
+    <div style="background:#101625;padding:8px 12px 6px;border-radius:12px;border:1px solid #1e1b4b;flex-shrink:0;height:128px">
+      <div style="font-size:11px;color:#f1c40f;font-weight:bold;margin-bottom:3px">為替相場 USD/JPY</div>
+      <div style="height:95px;position:relative">
+        <canvas id="forexChart"></canvas>
       </div>
     </div>
   </div>
 
   <!-- 右: 発言内容 -->
   <div style="background:#101625;padding:12px;border-radius:12px;border:1px solid #1e1b4b;display:flex;flex-direction:column;height:788px">
-    <div style="color:#8a7eff;font-weight:bold;font-size:14px;padding-bottom:8px;border-bottom:1px solid #374151;margin-bottom:8px">発言内容</div>
-    <p style="font-size:11px;color:#6b7280;margin:0 0 8px">タイムスタンプをクリックすると該当シーンへジャンプします。</p>
+    <div style="color:#8a7eff;font-weight:bold;font-size:14px;padding-bottom:8px;border-bottom:1px solid #374151;margin-bottom:8px;flex-shrink:0">発言内容</div>
+    <p style="font-size:11px;color:#6b7280;margin:0 0 8px;flex-shrink:0">タイムスタンプをクリックすると該当シーンへジャンプします。</p>
     <div style="flex:1;overflow-y:auto;padding-right:4px">
       {cards_html}
     </div>
@@ -267,9 +270,6 @@ body {{
 </div>
 
 <script>
-// Chart.js はhead内にインライン埋め込み済み → 即座に使用可能
-// =============================================================
-
 var chartData = {chart_json};
 
 function fmt(s) {{
@@ -278,7 +278,6 @@ function fmt(s) {{
   return ('0'+m).slice(-2) + ':' + ('0'+sec).slice(-2);
 }}
 
-// シーク関数 (各カードのonclickから呼ばれる)
 function seekTo(t) {{
   var v = document.getElementById('vid');
   if (!v) return;
@@ -287,23 +286,25 @@ function seekTo(t) {{
   if (p && typeof p.catch === 'function') {{ p.catch(function(){{}}); }}
 }}
 
-// チャート初期化 (Chart.jsインライン埋め込みのため即時実行)
 (function() {{
-  var canvas = document.getElementById('chartCanvas');
-  var video  = document.getElementById('vid');
-  var disp   = document.getElementById('timedisp');
-  if (!canvas || !video || !disp) return;
+  var sentCanvas  = document.getElementById('sentChart');
+  var forexCanvas = document.getElementById('forexChart');
+  var video = document.getElementById('vid');
+  var disp  = document.getElementById('timedisp');
+  if (!sentCanvas || !forexCanvas || !video || !disp) return;
   if (typeof Chart === 'undefined') return;
 
-  // 縦線プラグイン
+  // 現在再生位置 (分) を両チャートで共有
+  var currentMin = 0;
+
+  // 再生位置縦線プラグイン（両チャートに適用）
   var vlPlugin = {{
     id: 'vl',
     afterDraw: function(c) {{
-      var p = c.config.options.plugins.vl;
-      if (!p || p.x === undefined) return;
+      if (currentMin <= 0) return;
       var xa = c.scales.x, ya = c.scales.y;
       if (!xa || !ya) return;
-      var px = xa.getPixelForValue(p.x);
+      var px = xa.getPixelForValue(currentMin);
       if (px < xa.left || px > xa.right) return;
       var ctx = c.ctx;
       ctx.save();
@@ -311,26 +312,38 @@ function seekTo(t) {{
       ctx.moveTo(px, ya.top);
       ctx.lineTo(px, ya.bottom);
       ctx.lineWidth = 2;
-      ctx.setLineDash([5,4]);
+      ctx.setLineDash([5, 4]);
       ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-      ctx.shadowColor = '#635bff';
-      ctx.shadowBlur = 8;
+      ctx.shadowColor = '#a78bfa';
+      ctx.shadowBlur = 10;
       ctx.stroke();
       ctx.restore();
     }}
   }};
   Chart.register(vlPlugin);
 
-  var chart = new Chart(canvas.getContext('2d'), {{
+  // ── 感情分析チャート (言語・表情・音声) ──
+  var sentChart = new Chart(sentCanvas.getContext('2d'), {{
     type: 'line',
     data: {{
       labels: chartData.map(function(d){{ return d.m; }}),
       datasets: [
-        {{ label:'言語感情',    data:chartData.map(function(d){{return d.text;}}),      borderColor:'#2ecc71', borderWidth:2, pointRadius:0, tension:0.3, yAxisID:'e' }},
-        {{ label:'表情ポジネガ', data:chartData.map(function(d){{return d.face_val;}}),  borderColor:'#e74c3c', borderWidth:2, pointRadius:0, tension:0.3, yAxisID:'e' }},
-        {{ label:'表情緊張度',  data:chartData.map(function(d){{return d.face_aro;}}),  borderColor:'#9b59b6', borderWidth:2, pointRadius:0, tension:0.3, yAxisID:'e', borderDash:[5,5] }},
-        {{ label:'音声感情',    data:chartData.map(function(d){{return d.audio_val;}}), borderColor:'#3498db', borderWidth:2, pointRadius:0, tension:0.3, yAxisID:'e' }},
-        {{ label:'USD/JPY',     data:chartData.map(function(d){{return d.close;}}),     borderColor:'#f1c40f', borderWidth:2, pointRadius:0, tension:0.3, yAxisID:'f' }},
+        {{ label:'言語感情',
+           data: chartData.map(function(d){{ return d.text; }}),
+           borderColor:'#2ecc71', backgroundColor:'transparent',
+           borderWidth:2, pointRadius:0, tension:0.3 }},
+        {{ label:'表情ポジネガ',
+           data: chartData.map(function(d){{ return d.face_val; }}),
+           borderColor:'#e74c3c', backgroundColor:'transparent',
+           borderWidth:2, pointRadius:0, tension:0.3 }},
+        {{ label:'表情緊張度',
+           data: chartData.map(function(d){{ return d.face_aro; }}),
+           borderColor:'#9b59b6', backgroundColor:'transparent',
+           borderWidth:2, pointRadius:0, tension:0.3, borderDash:[5,5] }},
+        {{ label:'音声感情',
+           data: chartData.map(function(d){{ return d.audio_val; }}),
+           borderColor:'#3498db', backgroundColor:'transparent',
+           borderWidth:2, pointRadius:0, tension:0.3 }},
       ]
     }},
     options: {{
@@ -339,37 +352,65 @@ function seekTo(t) {{
       interaction: {{ mode:'index', intersect:false }},
       scales: {{
         x: {{
-          title: {{ display:true, text:'経過時間 (分足)', color:'#9ca3af' }},
-          grid: {{ color:'rgba(255,255,255,0.05)' }},
-          ticks: {{ color:'#6b7280', maxTicksLimit:12 }}
+          ticks: {{ color:'#6b7280', maxTicksLimit:10, font:{{ size:10 }} }},
+          grid:  {{ color:'rgba(255,255,255,0.04)' }}
         }},
-        e: {{
+        y: {{
           position: 'left',
-          title: {{ display:true, text:'感情スコア [-1,1]', color:'#9ca3af' }},
+          title: {{ display:true, text:'感情スコア [-1, 1]', color:'#9ca3af', font:{{ size:10 }} }},
           min: -1.2, max: 1.2,
-          grid: {{ color:'rgba(255,255,255,0.05)' }},
-          ticks: {{ color:'#6b7280' }}
-        }},
-        f: {{
-          position: 'right',
-          title: {{ display:true, text:'USD/JPY', color:'#9ca3af' }},
-          grid: {{ drawOnChartArea:false }},
-          ticks: {{ color:'#6b7280' }}
+          grid:  {{ color:'rgba(255,255,255,0.04)' }},
+          ticks: {{ color:'#6b7280', font:{{ size:10 }} }}
         }}
       }},
       plugins: {{
-        legend: {{ position:'top', labels:{{ color:'#9ca3af', boxWidth:10, font:{{ size:10 }} }} }},
-        vl: {{ x: undefined }}
+        legend: {{ position:'top', align:'start',
+          labels: {{ color:'#9ca3af', boxWidth:10, font:{{ size:10 }}, padding:8 }} }},
+        vl: {{}}
       }}
     }}
   }});
 
-  // 動画時間に連動して時刻表示とチャート縦線を更新
+  // ── USD/JPY サブチャート ──
+  var forexChart = new Chart(forexCanvas.getContext('2d'), {{
+    type: 'line',
+    data: {{
+      labels: chartData.map(function(d){{ return d.m; }}),
+      datasets: [
+        {{ label:'USD/JPY',
+           data: chartData.map(function(d){{ return d.close; }}),
+           borderColor:'#f1c40f', backgroundColor:'rgba(241,196,15,0.08)',
+           borderWidth:2, pointRadius:0, tension:0.3, fill:true }}
+      ]
+    }},
+    options: {{
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {{
+        x: {{
+          ticks: {{ color:'#6b7280', maxTicksLimit:10, font:{{ size:9 }} }},
+          grid:  {{ color:'rgba(255,255,255,0.04)' }}
+        }},
+        y: {{
+          position: 'right',
+          ticks: {{ color:'#f1c40f', font:{{ size:9 }}, maxTicksLimit:3 }},
+          grid:  {{ color:'rgba(255,255,255,0.04)' }}
+        }}
+      }},
+      plugins: {{
+        legend: {{ display:false }},
+        vl: {{}}
+      }}
+    }}
+  }});
+
+  // 動画時間に連動: タイムスタンプ表示 + 両チャートの縦線を同時更新
   video.addEventListener('timeupdate', function() {{
     var t = video.currentTime;
     disp.innerText = fmt(t);
-    chart.config.options.plugins.vl.x = t / 60.0;
-    chart.update('none');
+    currentMin = t / 60.0;
+    sentChart.update('none');
+    forexChart.update('none');
   }});
 }})();
 </script>
