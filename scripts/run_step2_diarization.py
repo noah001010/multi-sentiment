@@ -144,7 +144,20 @@ def main():
             for turn in diarization:
                 diar_data.append({"start": turn.start, "end": turn.end, "speaker": turn.speaker})
 
-        diar_df = pd.DataFrame(diar_data)
+        # --- セグメント結合（無音区間 3.0秒未満なら結合） ---
+        merged_data = []
+        for row in diar_data:
+            if not merged_data:
+                merged_data.append(row)
+            else:
+                last = merged_data[-1]
+                # 同じ話者かつ、間隔が3.0秒未満なら結合する
+                if row['speaker'] == last['speaker'] and (row['start'] - last['end']) < 3.0:
+                    last['end'] = max(last['end'], row['end'])
+                else:
+                    merged_data.append(row)
+
+        diar_df = pd.DataFrame(merged_data)
         diar_df.to_csv(output_path, index=False)
         logger.info(f"話者分離完了。結果を保存しました: {output_path}")
 

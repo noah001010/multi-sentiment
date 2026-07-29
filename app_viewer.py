@@ -11,16 +11,22 @@ import streamlit.components.v1 as components
 # --- ページ設定 ---
 st.set_page_config(page_title="日銀総裁記者会見 マルチモーダル感情分析", layout="wide")
 
+# 強制ライトモードのCSS
 st.markdown("""
 <style>
-    .stApp { background-color: #0b0f19; color: #f8fafc; }
+    /* 全体をライトモードに強制 */
+    .stApp { background-color: #f8fafc; color: #0f172a; }
+    
+    /* サイドバー */
     [data-testid="stSidebar"] {
-        background-color: #0f172a !important;
+        background-color: #ffffff !important;
         border-right: 1px solid rgba(99,91,255,0.3) !important;
     }
-    [data-testid="stSidebar"] * { color: #f8fafc !important; }
+    [data-testid="stSidebar"] * { color: #0f172a !important; }
+    
+    /* タイトルのグラデーション（少し濃い目に） */
     h1, h2, h3 {
-        background: linear-gradient(135deg, #635bff 0%, #a388ff 100%);
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         font-weight: 700;
@@ -173,7 +179,6 @@ for _, row in df.iterrows():
     sign     = "+" if score > 0 else ""
     speaker  = "総裁" if is_gov else "記者/その他"
     
-    # CSS変数を使ってライト/ダーク対応にするためのクラス付与
     card_class = "card-gov" if is_gov else "card-other"
     sp_class   = "sp-gov" if is_gov else "sp-other"
 
@@ -197,6 +202,7 @@ with st.sidebar:
 st.title("日銀総裁記者会見 マルチモーダル感情分析")
 
 # ── HTML ダッシュボード ──
+# 常にライトモードを使用するように変数を固定
 custom_html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -204,31 +210,10 @@ custom_html = f"""<!DOCTYPE html>
 {chartjs_script}
 <style>
 :root {{
-  /* ダークモード (デフォルト) */
-  --bg: #0b0f19;
-  --text: #f8fafc;
-  --panel-bg: #101625;
-  --border: #1e1b4b;
-  --border-light: #374151;
-  --card-gov-bg: #0c0d1a;
-  --card-gov-border: #4f46e5;
-  --card-other-bg: #111827;
-  --card-other-border: #374151;
-  --sp-gov: #8a7eff;
-  --sp-other: #9ca3af;
-  --card-text: #f1f5f9;
-  --active-bg: #1e293b;
-  --active-border: #818cf8;
-  --grid-line: rgba(255,255,255,0.04);
-  --btn-bg: #1f2937;
-  --btn-text: #f3f4f6;
-}}
-
-body.light-mode {{
-  /* ライトモード (ポスター用) */
-  --bg: #ffffff;
+  /* ライトモード (ポスター用・常時) */
+  --bg: #f8fafc;
   --text: #0f172a;
-  --panel-bg: #f8fafc;
+  --panel-bg: #ffffff;
   --border: #e2e8f0;
   --border-light: #cbd5e1;
   --card-gov-bg: #ffffff;
@@ -249,17 +234,16 @@ body {{
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: var(--bg); color: var(--text);
   margin: 0; padding: 8px; box-sizing: border-box;
-  transition: background 0.3s, color 0.3s;
 }}
 ::-webkit-scrollbar {{ width: 5px; }}
 ::-webkit-scrollbar-track {{ background: var(--panel-bg); }}
-::-webkit-scrollbar-thumb {{ background: #4b5563; border-radius: 3px; }}
+::-webkit-scrollbar-thumb {{ background: #94a3b8; border-radius: 3px; }}
 
 .panel {{
   background: var(--panel-bg);
   border-radius: 12px;
   border: 1px solid var(--border);
-  transition: background 0.3s, border-color 0.3s;
+  box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05);
 }}
 
 .card-base {{
@@ -269,7 +253,7 @@ body {{
   margin-bottom: 6px;
   transition: all 0.15s;
 }}
-.card-base:hover {{ opacity: 0.8; }}
+.card-base:hover {{ opacity: 0.8; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }}
 .card-gov {{ background: var(--card-gov-bg); border: 1px solid var(--card-gov-border); }}
 .card-other {{ background: var(--card-other-bg); border: 1px solid var(--card-other-border); }}
 .sp-gov {{ color: var(--sp-gov); }}
@@ -282,54 +266,39 @@ body {{
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
 }}
 
-.theme-toggle {{
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  background: var(--btn-bg);
-  color: var(--btn-text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
-  cursor: pointer;
-  z-index: 10;
-}}
 </style>
 </head>
 <body>
 
-<button class="theme-toggle" onclick="document.body.classList.toggle('light-mode'); updateChartsTheme();">☀️/🌙 Theme</button>
+<!-- 配置転換: 左に動画(55%)、右にテキスト・グラフ(45%) -->
+<div style="display:grid;grid-template-columns:55% 45%;gap:12px;height:750px;">
 
-<!-- 配置転換: 左にテキスト(35%)、右に映像・グラフ(65%) -->
-<div style="display:grid;grid-template-columns:35% 65%;gap:10px;height:700px;margin-top:20px;">
-
-  <!-- 左: 発言内容 (自動スクロール) -->
-  <div class="panel" style="padding:12px;display:flex;flex-direction:column;height:100%;overflow:hidden">
-    <div style="color:var(--sp-gov);font-weight:bold;font-size:14px;padding-bottom:8px;border-bottom:1px solid var(--border-light);margin-bottom:8px;flex-shrink:0">
-      発言内容 (自動同期)
-    </div>
-    <div id="transcript" style="flex:1;overflow-y:auto;padding-right:4px">
-      {cards_html}
-    </div>
+  <!-- 左: 動画 (一番大きく) -->
+  <div class="panel" style="padding:12px;display:flex;justify-content:center;align-items:center;background:#000;">
+    <video id="vid" controls preload="metadata"
+           style="width:100%;height:100%;object-fit:contain;border-radius:8px;">
+      <source src="http://localhost:8000/{video_basename}" type="video/mp4">
+      <source src="/app/static/{video_basename}" type="video/mp4">
+    </video>
   </div>
 
-  <!-- 右: 動画 + 感情チャート + USD/JPYサブチャート -->
-  <div style="display:flex;flex-direction:column;gap:8px;height:100%;overflow:hidden">
-
-    <!-- 動画 (映像エリア拡大) -->
-    <div class="panel" style="padding:8px;flex-shrink:0;display:flex;justify-content:center;background:#000;">
-      <video id="vid" controls preload="metadata"
-             style="width:100%;max-height:280px;border-radius:8px;display:block">
-        <source src="http://localhost:8000/{video_basename}" type="video/mp4">
-        <source src="/app/static/{video_basename}" type="video/mp4">
-      </video>
+  <!-- 右: 発言内容(上部) ＋ グラフ(下部) -->
+  <div style="display:flex;flex-direction:column;gap:12px;height:100%;overflow:hidden">
+    
+    <!-- 右上: 発言内容 (自動スクロール) -->
+    <div class="panel" style="padding:12px;flex:1;display:flex;flex-direction:column;min-height:0">
+      <div style="color:var(--sp-gov);font-weight:bold;font-size:14px;padding-bottom:8px;border-bottom:1px solid var(--border-light);margin-bottom:8px;flex-shrink:0">
+        発言内容 (自動同期)
+      </div>
+      <div id="transcript" style="flex:1;overflow-y:auto;padding-right:4px">
+        {cards_html}
+      </div>
     </div>
 
-    <!-- 感情分析チャート (縮小して表示) -->
-    <div class="panel" style="padding:10px 12px 4px;flex:1;display:flex;flex-direction:column;min-height:0">
+    <!-- 右下1: 感情分析チャート -->
+    <div class="panel" style="padding:10px 12px 4px;height:220px;display:flex;flex-direction:column;flex-shrink:0">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;flex-shrink:0">
-        <span style="color:var(--sp-gov);font-weight:bold;font-size:13px">感情分析の推移（クリックで動画と連動）</span>
+        <span style="color:var(--text);font-weight:bold;font-size:13px">感情スコアの推移（クリックで動画連動）</span>
         <span id="timedisp" style="font-family:monospace;font-size:12px;background:var(--card-other-bg);padding:3px 10px;border-radius:6px;border:1px solid var(--border-light);color:var(--text)">00:00</span>
       </div>
       <div style="flex:1;min-height:0;position:relative">
@@ -337,15 +306,15 @@ body {{
       </div>
     </div>
 
-    <!-- USD/JPY サブチャート (下部固定) -->
+    <!-- 右下2: USD/JPY サブチャート -->
     <div class="panel" style="padding:6px 12px 4px;flex-shrink:0;height:120px">
-      <div style="font-size:11px;color:#f1c40f;font-weight:bold;margin-bottom:2px">為替相場 USD/JPY</div>
+      <div style="font-size:11px;color:#f59e0b;font-weight:bold;margin-bottom:2px">為替相場 USD/JPY</div>
       <div style="height:85px;position:relative">
         <canvas id="forexChart"></canvas>
       </div>
     </div>
-  </div>
 
+  </div>
 </div>
 
 <script>
@@ -402,13 +371,7 @@ function onChartClick(e, elements, chart) {{
       ctx.lineTo(px, ya.bottom);
       ctx.lineWidth = 2;
       ctx.setLineDash([5, 4]);
-      // ライトモード時は黒線にする
-      var isLight = document.body.classList.contains('light-mode');
-      ctx.strokeStyle = isLight ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.9)';
-      if (!isLight) {{
-        ctx.shadowColor = '#a78bfa';
-        ctx.shadowBlur = 10;
-      }}
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)'; // ライトモード用
       ctx.stroke();
       ctx.restore();
     }}
@@ -437,7 +400,7 @@ function onChartClick(e, elements, chart) {{
         {{ label:'表情感情', data: chartData.map(function(d){{ return d.face_val; }}),
            borderColor:'#e74c3c', backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3, hitRadius: 10 }},
         {{ label:'音声感情', data: chartData.map(function(d){{ return d.audio_val; }}),
-           borderColor:'#3498db', backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3, hitRadius: 10 }}
+           borderColor:'#3b82f6', backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3, hitRadius: 10 }}
       ]
     }},
     options: {{
@@ -445,11 +408,11 @@ function onChartClick(e, elements, chart) {{
       onClick: onChartClick,
       interaction: {{ mode:'index', intersect:false }},
       scales: {{
-        x: {{ ticks: {{ color:'#6b7280', maxTicksLimit:10, font:{{ size:10 }} }}, grid: {{ color:'rgba(128,128,128,0.1)' }} }},
-        y: {{ position: 'left', title: {{ display:true, text:'感情スコア', color:'#9ca3af', font:{{ size:10 }} }},
-              grid: {{ color:'rgba(128,128,128,0.1)' }}, ticks: {{ color:'#6b7280', font:{{ size:10 }} }} }}
+        x: {{ ticks: {{ color:'#64748b', maxTicksLimit:10, font:{{ size:10 }} }}, grid: {{ color:'rgba(0,0,0,0.05)' }} }},
+        y: {{ position: 'left', title: {{ display:true, text:'感情スコア', color:'#64748b', font:{{ size:10 }} }},
+              grid: {{ color:'rgba(0,0,0,0.05)' }}, ticks: {{ color:'#64748b', font:{{ size:10 }} }} }}
       }},
-      plugins: {{ legend: {{ position:'top', align:'start', labels: {{ color:'#9ca3af', boxWidth:10, font:{{ size:10 }}, padding:8 }} }} }}
+      plugins: {{ legend: {{ position:'top', align:'start', labels: {{ color:'#334155', boxWidth:10, font:{{ size:10 }}, padding:8 }} }} }}
     }}
   }});
 
@@ -460,7 +423,7 @@ function onChartClick(e, elements, chart) {{
       labels: chartData.map(function(d){{ return d.m; }}),
       datasets: [
         {{ label:'USD/JPY', data: chartData.map(function(d){{ return d.close; }}),
-           borderColor:'#f1c40f', backgroundColor:'rgba(241,196,15,0.08)', borderWidth:2, pointRadius:0, tension:0.3, fill:true, hitRadius: 10 }}
+           borderColor:'#f59e0b', backgroundColor:'rgba(245,158,11,0.1)', borderWidth:2, pointRadius:0, tension:0.3, fill:true, hitRadius: 10 }}
       ]
     }},
     options: {{
@@ -468,8 +431,8 @@ function onChartClick(e, elements, chart) {{
       onClick: onChartClick,
       interaction: {{ mode:'index', intersect:false }},
       scales: {{
-        x: {{ ticks: {{ color:'#6b7280', maxTicksLimit:10, font:{{ size:9 }} }}, grid: {{ color:'rgba(128,128,128,0.1)' }} }},
-        y: {{ position: 'left', ticks: {{ color:'#f1c40f', font:{{ size:9 }}, maxTicksLimit:4 }}, grid: {{ color:'rgba(128,128,128,0.1)' }} }} // y軸をleftに揃える
+        x: {{ ticks: {{ color:'#64748b', maxTicksLimit:10, font:{{ size:9 }} }}, grid: {{ color:'rgba(0,0,0,0.05)' }} }},
+        y: {{ position: 'left', ticks: {{ color:'#f59e0b', font:{{ size:9 }}, maxTicksLimit:4 }}, grid: {{ color:'rgba(0,0,0,0.05)' }} }} // y軸をleftに揃える
       }},
       plugins: {{ legend: {{ display:false }} }}
     }}
@@ -505,14 +468,9 @@ function onChartClick(e, elements, chart) {{
     }}
   }});
 }})();
-
-function updateChartsTheme() {{
-  if(typeof sentChart !== 'undefined') sentChart.update('none');
-  if(typeof forexChart !== 'undefined') forexChart.update('none');
-}}
 </script>
 </body>
 </html>
 """
 
-components.html(custom_html, height=720, scrolling=False)
+components.html(custom_html, height=770, scrolling=False)
