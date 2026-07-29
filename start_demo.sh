@@ -35,6 +35,10 @@ else
 fi
 
 # ── Range Request 対応動画サーバーを起動（port 8000） ────────────
+echo "🧹 古い動画サーバーが残っている場合はクリーンアップします..."
+fuser -k 8000/tcp 2>/dev/null || true
+sleep 1
+
 echo "🌐 Range-capable 動画サーバーを起動中 (port 8000)..."
 python3 video_server.py 8000 static &
 VIDEO_SERVER_PID=$!
