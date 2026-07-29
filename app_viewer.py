@@ -440,7 +440,7 @@ function onChartClick(e, elements, chart) {{
       onClick: onChartClick,
       interaction: {{ mode:'index', intersect:false }},
       scales: {{
-        x: {{ ticks: {{ color:'#64748b', maxTicksLimit:10, font:{{ size:10 }} }}, grid: {{ color:'rgba(0,0,0,0.05)' }} }},
+        x: {{ min: 0, max: 60, ticks: {{ color:'#64748b', maxTicksLimit:10, font:{{ size:10 }} }}, grid: {{ color:'rgba(0,0,0,0.05)' }} }},
         y: {{ position: 'left', title: {{ display:true, text:'感情スコア', color:'#64748b', font:{{ size:10 }} }},
               grid: {{ color:'rgba(0,0,0,0.05)' }}, ticks: {{ color:'#64748b', font:{{ size:10 }} }} }}
       }},
@@ -463,7 +463,7 @@ function onChartClick(e, elements, chart) {{
       onClick: onChartClick,
       interaction: {{ mode:'index', intersect:false }},
       scales: {{
-        x: {{ ticks: {{ color:'#64748b', maxTicksLimit:10, font:{{ size:9 }} }}, grid: {{ color:'rgba(0,0,0,0.05)' }} }},
+        x: {{ min: 0, max: 60, ticks: {{ color:'#64748b', maxTicksLimit:10, font:{{ size:9 }} }}, grid: {{ color:'rgba(0,0,0,0.05)' }} }},
         y: {{ position: 'left', ticks: {{ color:'#f59e0b', font:{{ size:9 }}, maxTicksLimit:4 }}, grid: {{ color:'rgba(0,0,0,0.05)' }} }} // y軸をleftに揃える
       }},
       plugins: {{ legend: {{ display:false }} }}
