@@ -35,7 +35,7 @@ def main():
     parser.add_argument(
         "--wav_path",
         type=str,
-        default="data/boj_5min.wav",
+        default="data/boj_conference.wav",
         help="入力音声ファイル(.wav)のパス",
     )
     parser.add_argument(

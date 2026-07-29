@@ -108,8 +108,8 @@ def main():
     parser.add_argument(
         "--governor_id",
         type=str,
-        default="SPEAKER_00",
-        help="分析対象とする総裁の話者ID (デフォルト: SPEAKER_00)",
+        default="AUTO",
+        help="分析対象とする総裁の話者ID (デフォルト: AUTO - 最も発言時間の長い話者を自動判定)",
     )
     args = parser.parse_args()
 
@@ -195,9 +195,19 @@ def main():
     final_df["face_emotion_score"] = final_df["face_emotion_score"].fillna(0.0)
     final_df["face_arousal_score"] = final_df["face_arousal_score"].fillna(0.0)
 
-    # 2-4. is_governor
+    # 2-4. is_governor (Auto-detect if needed)
+    governor_id = args.governor_id
+    if governor_id == "AUTO" and not diar_df.empty:
+        # Calculate total duration for each speaker to auto-detect the main speaker (governor)
+        diar_df["duration"] = diar_df["end"] - diar_df["start"]
+        speaker_durations = diar_df.groupby("speaker")["duration"].sum()
+        governor_id = speaker_durations.idxmax()
+        logger.info(f"総裁の話者IDを自動判定しました: {governor_id} (総発言時間: {speaker_durations[governor_id]:.1f}秒)")
+    elif governor_id == "AUTO":
+        governor_id = "SPEAKER_00"
+        
     if "speaker" in final_df.columns:
-        final_df["is_governor"] = final_df["speaker"] == args.governor_id
+        final_df["is_governor"] = final_df["speaker"] == governor_id
     else:
         final_df["is_governor"] = False
 
