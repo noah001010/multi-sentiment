@@ -46,9 +46,32 @@ class AudioAnalyzer:
         try:
             model_name = "audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim"
             self.processor = AutoProcessor.from_pretrained(model_name)
-            self.model = AutoModelForAudioClassification.from_pretrained(model_name).to(self.device)
+            
+            # Load model and fix state dict keys for transformers version mismatch
+            from transformers import AutoConfig
+            config = AutoConfig.from_pretrained(model_name)
+            self.model = AutoModelForAudioClassification.from_config(config)
+            
+            import huggingface_hub
+            model_path = huggingface_hub.hf_hub_download(repo_id=model_name, filename="pytorch_model.bin")
+            state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
+            
+            # Map old classification head keys to new ones
+            key_mapping = {
+                "classifier.dense.weight": "projector.weight",
+                "classifier.dense.bias": "projector.bias",
+                "classifier.out_proj.weight": "classifier.weight",
+                "classifier.out_proj.bias": "classifier.bias"
+            }
+            new_state_dict = {}
+            for k, v in state_dict.items():
+                new_k = key_mapping.get(k, k)
+                new_state_dict[new_k] = v
+                
+            self.model.load_state_dict(new_state_dict, strict=False)
+            self.model.to(self.device)
             self.model.eval()
-            logger.info("Wav2Vec2 Audio Emotion model loaded successfully.")
+            logger.info("Wav2Vec2 Audio Emotion model loaded successfully with fixed weights.")
         except Exception as e:
             logger.error(f"Failed to initialize Wav2Vec2 model: {e}")
             raise RuntimeError(f"Wav2Vec2 initialization failed: {e}")
