@@ -121,7 +121,8 @@ if 'audio_valence' in df.columns and 'audio_emotion_score' not in df.columns:
     # 音声の感情値（Valence）は変動幅が小さいため、他の指標とスケールを合わせるために標準化（または定数倍）する
     std_val = df['audio_valence'].std()
     if pd.notna(std_val) and std_val > 0:
-        df['audio_emotion_score'] = (df['audio_valence'] - df['audio_valence'].mean()) / std_val
+        # Zスコア化(平均0, 標準偏差1)したあと、グラフに収まりやすいよう3で割る（-1〜1の範囲に収めるため）
+        df['audio_emotion_score'] = ((df['audio_valence'] - df['audio_valence'].mean()) / std_val) / 3.0
     else:
         df['audio_emotion_score'] = df['audio_valence']
 alias(df, 'audio_emotion_score',['audio_valence','audio_sentiment'])
@@ -158,6 +159,13 @@ df_1min = df.set_index('datetime').resample('1min').mean(numeric_only=True).rese
 avail = [v for v in ['text_score','face_emotion_score','audio_emotion_score',
                      'face_arousal_score','audio_arousal_score'] if v in df_1min.columns]
 df_m = pd.merge(df_fin, df_1min, on='datetime', how='inner').dropna(subset=['return']+avail)
+
+# 1分足に平均化するとノイズが相殺されて分散が極端に小さくなるため、再度標準化してスケールを合わせる
+if 'audio_emotion_score' in df_m.columns:
+    m_std = df_m['audio_emotion_score'].std()
+    if pd.notna(m_std) and m_std > 0:
+        df_m['audio_emotion_score'] = ((df_m['audio_emotion_score'] - df_m['audio_emotion_score'].mean()) / m_std) / 2.5
+
 df_p = df_m.copy()
 
 chart_data = []
