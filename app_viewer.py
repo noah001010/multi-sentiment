@@ -9,7 +9,7 @@ from pathlib import Path
 import streamlit.components.v1 as components
 
 # --- ページ設定 ---
-st.set_page_config(page_title="日銀総裁記者会見 マルチモーダル感情分析", layout="wide")
+st.set_page_config(layout="wide", page_title="日銀総裁会見マルチモーダル感情分析")
 
 # 強制ライトモードのCSS
 st.markdown("""
@@ -115,8 +115,15 @@ df_fin = load_forex(FOREX_PATH, START_STR)
 # 列名吸収
 alias(df, 'text',               ['sentence','content','transcript'])
 alias(df, 'text_score',         ['sentiment_score','text_score_mean','sentiment'])
-alias(df, 'face_emotion_score', ['mean_valence','valence','face_valence'])
-alias(df, 'face_arousal_score', ['mean_arousal','arousal','face_arousal'])
+if 'face_valence' in df.columns and 'face_emotion_score' not in df.columns:
+    df['face_emotion_score'] = df['face_valence']
+if 'audio_valence' in df.columns and 'audio_emotion_score' not in df.columns:
+    # 音声の感情値（Valence）は変動幅が小さいため、他の指標とスケールを合わせるために標準化（または定数倍）する
+    std_val = df['audio_valence'].std()
+    if pd.notna(std_val) and std_val > 0:
+        df['audio_emotion_score'] = (df['audio_valence'] - df['audio_valence'].mean()) / std_val
+    else:
+        df['audio_emotion_score'] = df['audio_valence']
 alias(df, 'audio_emotion_score',['audio_valence','audio_sentiment'])
 alias(df, 'audio_arousal_score',['audio_arousal'])
 alias(df, 'start',              ['start_time','start_sec'])
@@ -199,7 +206,7 @@ with st.sidebar:
     chartjs_ok = "✅ ローカル" if CHARTJS_PATH.exists() else "⚠️ CDN"
     st.markdown(f"**Chart.js:** {chartjs_ok}")
 
-st.title("日銀総裁記者会見 マルチモーダル感情分析")
+st.title("日銀総裁会見 マルチモーダル感情分析")
 
 # ── HTML ダッシュボード ──
 # 常にライトモードを使用するように変数を固定
