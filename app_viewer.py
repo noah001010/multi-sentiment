@@ -383,17 +383,17 @@ function onChartClick(e, elements, chart) {{
       if (labels.length === 0) return;
       if (currentMin <= labels[0]) px = xa.getPixelForTick(0);
       else if (currentMin >= labels[labels.length-1]) px = xa.getPixelForTick(labels.length-1);
-      else {
-        for (var i = 0; i < labels.length - 1; i++) {
-          if (currentMin >= labels[i] && currentMin <= labels[i+1]) {
+      else {{
+        for (var i = 0; i < labels.length - 1; i++) {{
+          if (currentMin >= labels[i] && currentMin <= labels[i+1]) {{
             var p1 = xa.getPixelForTick(i);
             var p2 = xa.getPixelForTick(i+1);
             var ratio = (currentMin - labels[i]) / (labels[i+1] - labels[i]);
             px = p1 + ratio * (p2 - p1);
             break;
-          }
-        }
-      }
+          }}
+        }}
+      }}
       
       if (px < xa.left || px > xa.right) return;
       var ctx = c.ctx;
