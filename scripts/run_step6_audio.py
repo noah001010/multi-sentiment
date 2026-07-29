@@ -6,7 +6,7 @@ run_step6_audio.py
 音響特徴量（F0・ラウドネス・ジッター等）を OpenSMILE を用いて抽出します。
 
 使い方:
-  python scripts/run_step6_audio.py [--wav_path data/boj_5min.wav] [--transcription_path output/transcription.csv] [--output_path output/audio_features.csv]
+  python scripts/run_step6_audio.py [--wav_path data/boj_conference.wav] [--transcription_path output/transcription.csv] [--output_path output/audio_features.csv]
 """
 import argparse
 import logging

@@ -5,7 +5,7 @@ run_step1_asr.py
 動画ファイルから音声を抽出し、Whisperを用いて文字起こし（タイムスタンプ付き）を行います。
 
 使い方:
-  python scripts/run_step1_asr.py [--video_path data/boj_5min.mp4] [--output_path output/transcription.csv]
+  python scripts/run_step1_asr.py [--video_path data/boj_conference.mp4] [--output_path output/transcription.csv]
 """
 import argparse
 import logging
@@ -35,7 +35,7 @@ def main():
     parser.add_argument(
         "--video_path",
         type=str,
-        default="data/boj_5min.mp4",
+        default="data/boj_conference.mp4",
         help="入力動画ファイルのパス",
     )
     parser.add_argument(

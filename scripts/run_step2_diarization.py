@@ -6,7 +6,7 @@ run_step2_diarization.py
 Hugging Face の認証トークンが必要です。
 
 使い方:
-  python scripts/run_step2_diarization.py [--video_path data/boj_5min.mp4] [--output_path output/raw/diarization.csv]
+  python scripts/run_step2_diarization.py [--video_path data/boj_conference.mp4] [--output_path output/raw/diarization.csv]
 """
 import argparse
 import logging
@@ -59,7 +59,7 @@ def main():
     parser.add_argument(
         "--video_path",
         type=str,
-        default="data/boj_5min.mp4",
+        default="data/boj_conference.mp4",
         help="入力動画ファイルのパス",
     )
     parser.add_argument(

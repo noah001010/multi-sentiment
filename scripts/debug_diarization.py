@@ -39,7 +39,7 @@ print(f"Loading pipeline with token: {hf_token[:5]}...")
 pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=hf_token)
 
 print("Processing audio...")
-diarization = pipeline("data/boj_5min.wav")
+diarization = pipeline("data/boj_conference.wav")
 
 print(f"Type of diarization result: {type(diarization)}")
 print(f"Attributes: {dir(diarization)}")

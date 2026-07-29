@@ -5,7 +5,7 @@ run_step3_facecrop.py
 話者分離の結果CSVに基づき、発話時間中の動画から顔画像を自動で検出して切り出します。
 
 使い方:
-  python scripts/run_step3_facecrop.py [--video_path data/boj_5min.mp4] [--diarization_path output/raw/diarization.csv] [--output_dir output/faces]
+  python scripts/run_step3_facecrop.py [--video_path data/boj_conference.mp4] [--diarization_path output/raw/diarization.csv] [--output_dir output/faces]
 """
 import argparse
 import logging
@@ -32,7 +32,7 @@ def main():
     parser.add_argument(
         "--video_path",
         type=str,
-        default="data/boj_5min.mp4",
+        default="data/boj_conference.mp4",
         help="入力動画ファイルのパス",
     )
     parser.add_argument(
