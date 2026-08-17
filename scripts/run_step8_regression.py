@@ -26,10 +26,10 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-def load_and_filter_forex_data(csv_path: str, conference_start_time_str: str) -> pd.DataFrame:
+def load_and_filter_forex_data(csv_path: str, conference_start_time_str: str):
     """
     HistData.com の汎用ASCIIフォーマット (USD/JPY 1分足など) を読み込み、
-    指定された会見開始時刻から1時間分のリターンを抽出する。
+    指定された会見開始時刻から1時間分のリターンと、会見前30分間のドリフトを抽出する。
     """
     print(f"[{csv_path}] HistDataの読み込みと前処理を開始します...")
     df = pd.read_csv(csv_path, sep=';', header=None, 
@@ -39,12 +39,25 @@ def load_and_filter_forex_data(csv_path: str, conference_start_time_str: str) ->
     df['datetime'] = df['datetime'] + pd.Timedelta(hours=14)
     df.sort_values('datetime', inplace=True)
     df['return'] = np.log(df['close'] / df['close'].shift(1)) * 100
+    
     start_time = pd.to_datetime(conference_start_time_str)
+    
+    # プレドリフト (前30分間の変化率 bp)
+    pre_start = start_time - pd.Timedelta(minutes=30)
+    pre_df = df[(df['datetime'] >= pre_start) & (df['datetime'] <= start_time)]
+    if not pre_df.empty and len(pre_df) >= 2:
+        close_start = pre_df.iloc[0]['close']
+        close_end = pre_df.iloc[-1]['close']
+        pre_drift = (close_end / close_start - 1) * 10000
+    else:
+        pre_drift = np.nan
+        
     end_time = start_time + pd.Timedelta(hours=1)
     filtered_df = df[(df['datetime'] >= start_time) & (df['datetime'] <= end_time)].copy()
     filtered_df.dropna(subset=['return'], inplace=True)
     print(f"  -> 抽出されたデータ件数: {len(filtered_df)}件 (期間: {start_time} 〜 {end_time})")
-    return filtered_df[['datetime', 'return']]
+    print(f"  -> 会見前ドリフト(bp): {pre_drift:.2f}" if not pd.isna(pre_drift) else "  -> 会見前ドリフト(bp): N/A")
+    return filtered_df[['datetime', 'return']], pre_drift
 
 logging.basicConfig(
     level=logging.INFO,
@@ -106,11 +119,13 @@ def main():
         logger.error("分析対象データが空です。総裁IDの設定などを確認してください。")
         sys.exit(1)
 
+    conference_start_time = pd.to_datetime(args.start_time)
+
     # 2. 為替データのロードと対数収益率（return）の計算
     logger.info(f"金融為替データを処理中 (基準会見時刻: {args.start_time})...")
     if "DAT_ASCII" in fin_path.name:
         # HistData.com 形式
-        df_fin = load_and_filter_forex_data(str(fin_path), args.start_time)
+        df_fin, pre_drift = load_and_filter_forex_data(str(fin_path), args.start_time)
     else:
         # 一般的な return 列を含むCSV
         df_fin = pd.read_csv(fin_path)
@@ -118,9 +133,61 @@ def main():
         if 'return' not in df_fin.columns:
             logger.error("金融CSVに 'return' カラムが存在しません。")
             sys.exit(1)
+        pre_drift = np.nan
 
+    # === 追加: コントロール変数の抽出 ===
+    logger.info("コントロール変数 (MPU, Policy Rate, TOPIX) を抽出中...")
+    try:
+        df_mpu = pd.read_excel('data/Japan_Policy_Uncertainty_Data.xlsx')
+        mpu_col = next((c for c in df_mpu.columns if 'Monetary Policy' in str(c) or 'MPU' in str(c)), None)
+        mpu_val = df_mpu[(df_mpu['Year'] == conference_start_time.year) & (df_mpu['Month'] == conference_start_time.month)][mpu_col].values
+        mpu_japan = float(mpu_val[0]) if len(mpu_val) > 0 else np.nan
+    except Exception as e:
+        logger.warning(f"MPUデータの読み込みに失敗しました: {e}")
+        mpu_japan = np.nan
+
+    try:
+        df_rate = pd.read_csv('data/boj_policy_rate.csv')
+        df_rate['meeting_date'] = pd.to_datetime(df_rate['meeting_date'])
+        df_rate = df_rate.sort_values('meeting_date').reset_index(drop=True)
+        idx_match = df_rate[df_rate['meeting_date'] == pd.to_datetime(conference_start_time.strftime('%Y-%m-%d'))].index
+        if len(idx_match) > 0:
+            idx = idx_match[0]
+            rate_change_bp = float(df_rate.loc[idx, 'rate_change_bp'])
+            ycc_change_dummy = float(df_rate.loc[idx, 'ycc_change_dummy'])
+            prev_meeting_date = df_rate.loc[idx - 1, 'meeting_date'] if idx > 0 else pd.NaT
+        else:
+            rate_change_bp, ycc_change_dummy, prev_meeting_date = np.nan, np.nan, pd.NaT
+    except Exception as e:
+        logger.warning(f"政策金利データの読み込みに失敗しました: {e}")
+        rate_change_bp, ycc_change_dummy, prev_meeting_date = np.nan, np.nan, pd.NaT
+
+    try:
+        df_topix = pd.read_excel('data/eoldb-results_20260802120248.xlsx', header=4)
+        date_col = next((c for c in df_topix.columns if '日付' in str(c) or '年月日' in str(c) or 'Date' in str(c)), df_topix.columns[0])
+        close_col = next((c for c in df_topix.columns if '終値' in str(c) or 'Close' in str(c)), df_topix.columns[4])
+        
+        if not pd.isna(prev_meeting_date):
+            df_topix[date_col] = pd.to_datetime(df_topix[date_col])
+            prev_close_rows = df_topix[df_topix[date_col] == prev_meeting_date]
+            prev_close = prev_close_rows[close_col].values[0] if not prev_close_rows.empty else np.nan
+
+            current_meeting_date = pd.to_datetime(conference_start_time.strftime('%Y-%m-%d'))
+            biz_days = df_topix[df_topix[date_col] < current_meeting_date].sort_values(date_col)
+            prev_biz_close = biz_days.iloc[-1][close_col] if not biz_days.empty else np.nan
+
+            if not pd.isna(prev_close) and not pd.isna(prev_biz_close):
+                market_conditions = float((prev_biz_close / prev_close - 1) * 100)
+            else:
+                market_conditions = np.nan
+        else:
+            market_conditions = np.nan
+    except Exception as e:
+        logger.warning(f"TOPIXデータの読み込みに失敗しました: {e}")
+        market_conditions = np.nan
+    # ====================================
+    
     # 3. 感情データと為替データの時間マージ (1分単位)
-    conference_start_time = pd.to_datetime(args.start_time)
     
     # 秒数 timestamp から実際の日時を算出してインデックス化
     df_integ['datetime'] = conference_start_time + pd.to_timedelta(df_integ['start'], unit='s')
@@ -133,21 +200,35 @@ def main():
     # マージ
     available_vars = [v for v in ['text_score', 'face_emotion_score', 'audio_emotion_score', 'face_arousal_score', 'audio_arousal_score'] if v in df_integ_1min.columns]
     df_merged = pd.merge(df_fin, df_integ_1min, on='datetime', how='inner')
-    df_merged = df_merged.dropna(subset=['return'] + available_vars)
+    
+    # コントロール変数の付与
+    df_merged['USDJPY_Pre_Drift'] = pre_drift
+    df_merged['MPU_Japan'] = mpu_japan
+    df_merged['Rate_Change_BP'] = rate_change_bp
+    df_merged['YCC_Change_Dummy'] = ycc_change_dummy
+    df_merged['Market_Conditions'] = market_conditions
+
+    # 4. OLS回帰分析 (HAC robust standard errors) の実行
+    Y = df_merged['return']
+    
+    # 【回帰分析の変数構成】
+    # 被説明変数：USD/JPYのリターン（〇分足）
+    # 説明変数：テキスト感情スコア、表情スコア、音声スコア、乖離スコア
+    # コントロール変数：USDJPY_Pre_Drift, MPU_Japan, Rate_Change_BP, YCC_Change_Dummy, Market_Conditions
+    
+    X_vars = available_vars + ['USDJPY_Pre_Drift', 'MPU_Japan', 'Rate_Change_BP', 'YCC_Change_Dummy', 'Market_Conditions']
+    # 欠損値を含む行をドロップ
+    df_merged = df_merged.dropna(subset=['return'] + X_vars)
 
     if df_merged.empty:
         logger.error(
-            f"データ結合に失敗しました。会見の開始日時（{args.start_time}）と、"
-            "為替データの日時が正しく一致しているか確認してください。"
+            f"データ結合に失敗したか、変数の欠損値によりデータが空になりました。会見の開始日時（{args.start_time}）を確認してください。"
         )
         sys.exit(1)
 
     logger.info(f"アライメント完了。有効サンプルサイズ (N): {len(df_merged)}")
 
-    # 4. OLS回帰分析 (HAC robust standard errors) の実行
     Y = df_merged['return']
-    # 説明変数 (表情の感情価と覚醒度、音声の感情価と覚醒度、テキスト感情スコア)
-    X_vars = available_vars
     X = df_merged[X_vars]
     X_with_const = sm.add_constant(X)
 
