@@ -139,8 +139,8 @@ def main():
     logger.info("コントロール変数 (MPU, Policy Rate, TOPIX) を抽出中...")
     try:
         df_mpu = pd.read_excel('data/Japan_Policy_Uncertainty_Data.xlsx')
-        mpu_col = next((c for c in df_mpu.columns if 'Monetary Policy' in str(c) or 'MPU' in str(c)), None)
-        mpu_val = df_mpu[(df_mpu['Year'] == conference_start_time.year) & (df_mpu['Month'] == conference_start_time.month)][mpu_col].values
+        # 年月に合致する行の3列目（インデックス2）の値をMPU指数として取得
+        mpu_val = df_mpu[(df_mpu.iloc[:, 0] == conference_start_time.year) & (df_mpu.iloc[:, 1] == conference_start_time.month)].iloc[:, 2].values
         mpu_japan = float(mpu_val[0]) if len(mpu_val) > 0 else np.nan
     except Exception as e:
         logger.warning(f"MPUデータの読み込みに失敗しました: {e}")
