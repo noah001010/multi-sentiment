@@ -150,14 +150,23 @@ def main():
         df_rate = pd.read_csv('data/boj_policy_rate.csv')
         df_rate['meeting_date'] = pd.to_datetime(df_rate['meeting_date'])
         df_rate = df_rate.sort_values('meeting_date').reset_index(drop=True)
-        idx_match = df_rate[df_rate['meeting_date'] == pd.to_datetime(conference_start_time.strftime('%Y-%m-%d'))].index
+        
+        current_date = pd.to_datetime(conference_start_time.strftime('%Y-%m-%d'))
+        
+        # 過去の会合日を取得
+        past_meetings = df_rate[df_rate['meeting_date'] < current_date]
+        prev_meeting_date = past_meetings.iloc[-1]['meeting_date'] if not past_meetings.empty else pd.NaT
+
+        idx_match = df_rate[df_rate['meeting_date'] == current_date].index
         if len(idx_match) > 0:
             idx = idx_match[0]
             rate_change_bp = float(df_rate.loc[idx, 'rate_change_bp'])
             ycc_change_dummy = float(df_rate.loc[idx, 'ycc_change_dummy'])
-            prev_meeting_date = df_rate.loc[idx - 1, 'meeting_date'] if idx > 0 else pd.NaT
         else:
-            rate_change_bp, ycc_change_dummy, prev_meeting_date = np.nan, np.nan, pd.NaT
+            # CSVに当日がない場合は変更なし（0）とみなす
+            rate_change_bp = 0.0
+            ycc_change_dummy = 0.0
+            logger.info(f"boj_policy_rate.csv に {current_date.date()} が存在しないため、Rate_Change=0, YCC=0 とします。")
     except Exception as e:
         logger.warning(f"政策金利データの読み込みに失敗しました: {e}")
         rate_change_bp, ycc_change_dummy, prev_meeting_date = np.nan, np.nan, pd.NaT
@@ -169,19 +178,23 @@ def main():
         
         if not pd.isna(prev_meeting_date):
             df_topix[date_col] = pd.to_datetime(df_topix[date_col])
-            prev_close_rows = df_topix[df_topix[date_col] == prev_meeting_date]
-            prev_close = prev_close_rows[close_col].values[0] if not prev_close_rows.empty else np.nan
+            
+            # 前回の会合日（または直前の営業日）の終値
+            prev_close_rows = df_topix[df_topix[date_col] <= prev_meeting_date].sort_values(date_col)
+            prev_close = float(prev_close_rows.iloc[-1][close_col]) if not prev_close_rows.empty else np.nan
 
-            current_meeting_date = pd.to_datetime(conference_start_time.strftime('%Y-%m-%d'))
-            biz_days = df_topix[df_topix[date_col] < current_meeting_date].sort_values(date_col)
-            prev_biz_close = biz_days.iloc[-1][close_col] if not biz_days.empty else np.nan
+            # 今回の会合日の前営業日の終値
+            biz_days = df_topix[df_topix[date_col] < current_date].sort_values(date_col)
+            prev_biz_close = float(biz_days.iloc[-1][close_col]) if not biz_days.empty else np.nan
 
-            if not pd.isna(prev_close) and not pd.isna(prev_biz_close):
+            if not pd.isna(prev_close) and not pd.isna(prev_biz_close) and prev_close != 0:
                 market_conditions = float((prev_biz_close / prev_close - 1) * 100)
             else:
                 market_conditions = np.nan
+                logger.warning("TOPIXの前回終値または前営業日終値が取得できませんでした。")
         else:
             market_conditions = np.nan
+            logger.warning("前回の会合日が特定できないためTOPIXを計算できませんでした。")
     except Exception as e:
         logger.warning(f"TOPIXデータの読み込みに失敗しました: {e}")
         market_conditions = np.nan
