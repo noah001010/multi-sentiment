@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import variance_inflation_factor
+import yfinance as yf
 
 # プロジェクトのルートディレクトリをシステムパスに追加
 ROOT = Path(__file__).resolve().parent.parent
@@ -166,37 +167,45 @@ def main():
             # CSVに当日がない場合は変更なし（0）とみなす
             rate_change_bp = 0.0
             ycc_change_dummy = 0.0
-            logger.info(f"boj_policy_rate.csv に {current_date.date()} が存在しないため、Rate_Change=0, YCC=0 とします。")
+            logger.info(f"{current_date.month}/{current_date.day}のデータはCSVにないため、直近の会合データを参照し、据え置き（Rate_Change_BP=0, YCC=0）として処理しました")
     except Exception as e:
         logger.warning(f"政策金利データの読み込みに失敗しました: {e}")
         rate_change_bp, ycc_change_dummy, prev_meeting_date = np.nan, np.nan, pd.NaT
 
     try:
-        df_topix = pd.read_excel('data/eoldb-results_20260802120248.xlsx', header=4)
-        date_col = next((c for c in df_topix.columns if '日付' in str(c) or '年月日' in str(c) or 'Date' in str(c)), df_topix.columns[0])
-        close_col = next((c for c in df_topix.columns if '終値' in str(c) or 'Close' in str(c)), df_topix.columns[4])
-        
         if not pd.isna(prev_meeting_date):
-            df_topix[date_col] = pd.to_datetime(df_topix[date_col])
+            # yfinanceを使って日経平均(^N225)のデータを取得
+            start_dl = '2022-01-01'
+            end_dl = (current_date + pd.Timedelta(days=7)).strftime('%Y-%m-%d')
+            df_n225 = yf.download('^N225', start=start_dl, end=end_dl, progress=False)
             
-            # 前回の会合日（または直前の営業日）の終値
-            prev_close_rows = df_topix[df_topix[date_col] <= prev_meeting_date].sort_values(date_col)
-            prev_close = float(prev_close_rows.iloc[-1][close_col]) if not prev_close_rows.empty else np.nan
+            if not df_n225.empty:
+                df_n225 = df_n225.reset_index()
+                # 日付列の名前は 'Date'
+                df_n225['Date'] = pd.to_datetime(df_n225['Date']).dt.tz_localize(None)
+                
+                # 前回の会合日（または直前の営業日）の終値
+                prev_close_rows = df_n225[df_n225['Date'] <= prev_meeting_date].sort_values('Date')
+                # yfinance のカラムはマルチインデックスになる場合があるため、float()に変換する前にilocを使用
+                prev_close = float(prev_close_rows.iloc[-1]['Close'].iloc[0] if isinstance(prev_close_rows.iloc[-1]['Close'], pd.Series) else prev_close_rows.iloc[-1]['Close']) if not prev_close_rows.empty else np.nan
 
-            # 今回の会合日の前営業日の終値
-            biz_days = df_topix[df_topix[date_col] < current_date].sort_values(date_col)
-            prev_biz_close = float(biz_days.iloc[-1][close_col]) if not biz_days.empty else np.nan
+                # 今回の会合日の前営業日の終値
+                biz_days = df_n225[df_n225['Date'] < current_date].sort_values('Date')
+                prev_biz_close = float(biz_days.iloc[-1]['Close'].iloc[0] if isinstance(biz_days.iloc[-1]['Close'], pd.Series) else biz_days.iloc[-1]['Close']) if not biz_days.empty else np.nan
 
-            if not pd.isna(prev_close) and not pd.isna(prev_biz_close) and prev_close != 0:
-                market_conditions = float((prev_biz_close / prev_close - 1) * 100)
+                if not pd.isna(prev_close) and not pd.isna(prev_biz_close) and prev_close != 0:
+                    market_conditions = float((prev_biz_close / prev_close - 1) * 100)
+                else:
+                    market_conditions = np.nan
+                    logger.warning("日経平均の前回終値または前営業日終値が取得できませんでした。")
             else:
                 market_conditions = np.nan
-                logger.warning("TOPIXの前回終値または前営業日終値が取得できませんでした。")
+                logger.warning("yfinanceから日経平均のデータが取得できませんでした。")
         else:
             market_conditions = np.nan
-            logger.warning("前回の会合日が特定できないためTOPIXを計算できませんでした。")
+            logger.warning("前回の会合日が特定できないため日経平均を計算できませんでした。")
     except Exception as e:
-        logger.warning(f"TOPIXデータの読み込みに失敗しました: {e}")
+        logger.warning(f"日経平均データ(yfinance)の読み込みに失敗しました: {e}")
         market_conditions = np.nan
     # ====================================
     
