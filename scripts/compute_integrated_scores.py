@@ -1,19 +1,20 @@
 """
 compute_integrated_scores.py
 ============================
-既存の中間CSVを読み込み、3モダリティの感情スコアを計算して
-integrated_results.csv に新列を追加するスタンドアロンスクリプト。
+既存の中間CSVを読み込み、学術論文準拠（Curti & Kazinnik 2023等）の
+マルチモダリティ指標（OpenSMILE除外、Wav2Vec2・Py-Feat・ModernBERT標準）を計算して
+integrated_results.csv に追加・更新するスクリプト。
 
-追加される列:
+追加・更新される主な列:
   text_score            ModernBERT 回帰値（sentiment_score のエイリアス）
-  audio_emotion_score   z(loudness)+z(F0_mean)-z(jitter)-z(shimmer)
-  face_emotion_score    AU12 - AU04 の発話区間平均
+  face_negative_score   Py-Feat (anger + disgust + fear) の発話区間平均
+  audio_arousal         Wav2Vec2 音声感情モデル（覚醒度/興奮度）
+  audio_valence         Wav2Vec2 音声感情モデル（感情価/快不快）
   is_governor           speaker == governor_id かどうか
-  discrepancy_score     |text-audio| + |text-face|
-  discrepancy_score_3   discrepancy_score + |audio-face|
+  discrepancy_score     |text_score - audio_valence| + |text_score - (-face_negative_score)|
 
 使い方:
-  .venv/bin/python scripts/compute_integrated_scores.py [--governor_id SPEAKER_15]
+  python scripts/compute_integrated_scores.py [--governor_id SPEAKER_15]
 """
 import argparse
 import logging
@@ -35,87 +36,38 @@ ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "output"
 
 
-# ---------------------------------------------------------------------------
-# Helper: z-score 標準化
-# ---------------------------------------------------------------------------
-
-def zscore(series: pd.Series) -> pd.Series:
-    """NaN を無視してz-score 正規化する。std==0 の場合は 0 を返す。"""
-    mu = series.mean()
-    sigma = series.std()
-    if sigma == 0:
-        return pd.Series(np.zeros(len(series)), index=series.index)
-    return (series - mu) / sigma
-
-
-# ---------------------------------------------------------------------------
-# Audio emotion score
-# ---------------------------------------------------------------------------
-
-def compute_audio_emotion_score(audio_df: pd.DataFrame) -> pd.Series:
-    """
-    audio_emotion_score = z(loudness) + z(F0_mean) - z(jitter) - z(shimmer)
-    sentence_id をインデックスとして返す。
-    """
-    df = audio_df.copy()
-    required = ["F0_mean", "jitter", "shimmer", "loudness"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"audio_features.csv に必要な列がありません: {missing}")
-
-    df["z_loudness"] = zscore(df["loudness"])
-    df["z_F0_mean"] = zscore(df["F0_mean"])
-    df["z_jitter"] = zscore(df["jitter"])
-    df["z_shimmer"] = zscore(df["shimmer"])
-
-    df["audio_emotion_score"] = (
-        df["z_loudness"] + df["z_F0_mean"] - df["z_jitter"] - df["z_shimmer"]
-    )
-    return df.set_index("sentence_id")["audio_emotion_score"]
-
-
-# ---------------------------------------------------------------------------
-# Face emotion score
-# ---------------------------------------------------------------------------
-
-def compute_face_emotion_score(
+def compute_face_negative_score(
     face_df: pd.DataFrame,
     starts: pd.Series,
     ends: pd.Series,
     fps: float = 30.0,
 ) -> pd.Series:
     """
-    face_emotion_score = mean(AU12 - AU04) over frames in [start, end].
-
-    is_blink は全行 0 のため除外。
-    frame 列を fps で割って timestamp に変換。
+    Curti & Kazinnik (2023) に準拠し、
+    face_negative_score = anger + disgust + fear の発話区間平均を算出する。
     """
     df = face_df.copy()
-    required = ["frame", "AU04", "AU12"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"facial_features_clean.csv に必要な列がありません: {missing}")
 
-    # NaN行をドロップ（AU04 に NaN がある場合がある）
-    df = df.dropna(subset=["AU04", "AU12"])
+    if "face_negative_score" not in df.columns:
+        if set(["anger", "disgust", "fear"]).issubset(df.columns):
+            df["face_negative_score"] = df["anger"] + df["disgust"] + df["fear"]
+        else:
+            logger.warning("facial_features_clean.csv に negative 構成要素 (anger, disgust, fear) が存在しません。")
+            return pd.Series(np.zeros(len(starts)), index=starts.index)
+
+    df = df.dropna(subset=["face_negative_score"])
     df["timestamp"] = df["frame"] / fps
-    df["frame_score"] = df["AU12"] - df["AU04"]
 
     scores = []
     for start, end in zip(starts, ends):
         mask = (df["timestamp"] >= start) & (df["timestamp"] <= end)
-        subset = df.loc[mask, "frame_score"]
+        subset = df.loc[mask, "face_negative_score"]
         scores.append(float(subset.mean()) if not subset.empty else float("nan"))
 
     return pd.Series(scores, index=starts.index)
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main(governor_id: str = "SPEAKER_15"):
-    # ------ ファイル読み込み ------
     integrated_path = OUTPUT / "integrated_results.csv"
     audio_path = OUTPUT / "audio_features.csv"
     face_path = OUTPUT / "facial_features_clean.csv"
@@ -134,92 +86,76 @@ def main(governor_id: str = "SPEAKER_15"):
     logger.info("facial_features_clean.csv を読み込み中...")
     face_df = pd.read_csv(face_path)
 
-    # ------ バックアップ ------
+    # バックアップ作成
     bak_path = integrated_path.with_suffix(".csv.bak")
     shutil.copy2(integrated_path, bak_path)
     logger.info(f"バックアップ作成: {bak_path}")
 
-    # ------ text_score ------
+    # 1. text_score
     if "sentiment_score" not in integ.columns:
         raise ValueError("integrated_results.csv に sentiment_score 列がありません")
     integ["text_score"] = integ["sentiment_score"]
-    logger.info("text_score 列を追加（sentiment_score エイリアス）")
 
-    # ------ audio_emotion_score ------
-    logger.info("audio_emotion_score を計算中...")
-    audio_score_series = compute_audio_emotion_score(audio_df)
-
-    # integ の行インデックス（= sentence_id）で紐付け
-    if "sentence_id" in integ.columns:
-        integ["audio_emotion_score"] = integ["sentence_id"].map(audio_score_series)
+    # 2. 音声指標 (Wav2Vec2: audio_arousal, audio_valence) のマージ
+    logger.info("音声感情指標 (Wav2Vec2: audio_arousal, audio_valence) をマージ中...")
+    audio_cols = ["audio_arousal", "audio_valence"]
+    
+    if "sentence_id" in integ.columns and "sentence_id" in audio_df.columns:
+        for col in audio_cols:
+            if col in audio_df.columns:
+                series = audio_df.set_index("sentence_id")[col]
+                integ[col] = integ["sentence_id"].map(series)
+            else:
+                logger.warning(f"audio_features.csv に '{col}' が見つかりません。")
+                integ[col] = np.nan
     else:
-        # sentence_id がない場合は行番号で紐付け
-        if len(audio_score_series) == len(integ):
-            integ["audio_emotion_score"] = audio_score_series.values
-        else:
-            logger.warning(
-                "sentence_id 列がなく行数も一致しない → audio_emotion_score を NaN で埋めます"
-            )
-            integ["audio_emotion_score"] = float("nan")
+        for col in audio_cols:
+            if col in audio_df.columns and len(audio_df) == len(integ):
+                integ[col] = audio_df[col].values
+            else:
+                integ[col] = np.nan
 
-    logger.info(
-        f"audio_emotion_score: mean={integ['audio_emotion_score'].mean():.4f}, "
-        f"std={integ['audio_emotion_score'].std():.4f}"
-    )
-
-    # ------ face_emotion_score ------
-    logger.info("face_emotion_score を計算中...")
-    integ["face_emotion_score"] = compute_face_emotion_score(
+    # 3. 表情ネガティブ指標 (face_negative_score)
+    logger.info("表情ネガティブスコア (face_negative_score: anger+disgust+fear) を計算中...")
+    integ["face_negative_score"] = compute_face_negative_score(
         face_df,
         starts=integ["start"],
         ends=integ["end"],
     )
-    nan_face = integ["face_emotion_score"].isna().sum()
-    logger.info(
-        f"face_emotion_score: mean={integ['face_emotion_score'].mean():.4f}, "
-        f"NaN={nan_face}/{len(integ)}"
-    )
+    integ["face_negative_score"] = integ["face_negative_score"].fillna(0.0)
 
-    # NaN を 0 で補完（顔が映っていない区間）
-    integ["face_emotion_score"] = integ["face_emotion_score"].fillna(0.0)
+    # 旧独自カラムおよび OpenSMILE パラメータを完全に削除
+    drop_cols = ["audio_emotion_score", "face_emotion_score", "face_arousal_score", "F0_mean", "jitter", "shimmer", "loudness"]
+    for col in drop_cols:
+        if col in integ.columns:
+            integ.drop(columns=[col], inplace=True)
 
-    # ------ is_governor ------
+    # 4. is_governor
     if "speaker" in integ.columns:
         integ["is_governor"] = integ["speaker"] == governor_id
-        governor_cnt = integ["is_governor"].sum()
-        logger.info(f"is_governor: {governor_cnt} 行（governor_id={governor_id}）")
     else:
-        logger.warning("speaker 列がないため is_governor を False で埋めます")
         integ["is_governor"] = False
 
-    # ------ discrepancy_score ------
-    logger.info("discrepancy_score を計算中...")
+    # 5. 学術的 乖離度 (Discrepancy) スコアの計算
+    logger.info("感情乖離度 (discrepancy_score) を計算中...")
     t = integ["text_score"]
-    a = integ["audio_emotion_score"]
-    f = integ["face_emotion_score"]
+    a = integ["audio_valence"].fillna(0.0)
+    f_val = -integ["face_negative_score"]
 
-    integ["discrepancy_score"] = (t - a).abs() + (t - f).abs()
-    integ["discrepancy_score_3"] = integ["discrepancy_score"] + (a - f).abs()
+    integ["discrepancy_score"] = (t - a).abs() + (t - f_val).abs()
+    integ["discrepancy_score_3"] = integ["discrepancy_score"] + (a - f_val).abs()
 
-    logger.info(
-        f"discrepancy_score: mean={integ['discrepancy_score'].mean():.4f}, "
-        f"max={integ['discrepancy_score'].max():.4f}"
-    )
-
-    # ------ 保存 ------
+    # 保存
     integ.to_csv(integrated_path, index=False)
-    logger.info(f"integrated_results.csv を更新しました: {integrated_path}")
-    logger.info(f"新規追加列: text_score, audio_emotion_score, face_emotion_score, "
-                "is_governor, discrepancy_score, discrepancy_score_3")
+    logger.info(f"integrated_results.csv を新仕様に更新しました: {integrated_path}")
 
-    # ------ サマリー出力 ------
-    new_cols = [
-        "text_score", "audio_emotion_score", "face_emotion_score",
-        "is_governor", "discrepancy_score", "discrepancy_score_3"
+    # サマリー表示
+    cols_to_show = [
+        "text_score", "face_negative_score", "audio_arousal", "audio_valence", "discrepancy_score"
     ]
-    print("\n=== 追加列サマリー ===")
-    print(integ[new_cols].describe().round(4))
-    print(f"\ngovernor 行数: {integ['is_governor'].sum()} / {len(integ)}")
+    existing_show = [c for c in cols_to_show if c in integ.columns]
+    print("\n=== 学術論文仕様 統合感情データ サマリー ===")
+    print(integ[existing_show].describe().round(4))
 
 
 if __name__ == "__main__":

@@ -273,14 +273,14 @@ def main():
         visual_df.to_csv(visual_clean_path, index=False)
         logger.info(f"Cleaned facial features saved to {visual_clean_path}")
 
-    # 2-3. 音声分析 (OpenSMILE)
+    # 2-3. 音声分析 (Wav2Vec2)
     audio_feat_path = output_dir / "audio_features.csv"
     if audio_feat_path.exists():
-        logger.info(f"既存の音声分析結果が見つかりました: {audio_feat_path}. OpenSMILEをスキップします。")
+        logger.info(f"既存の音声分析結果が見つかりました: {audio_feat_path}. 音声分析をスキップします。")
         audio_df = pd.read_csv(audio_feat_path)
     else:
         from src.features.audio_analysis import AudioAnalyzer
-        logger.info("OpenSMILEによる音声プロソディ分析を実行中...")
+        logger.info("Wav2Vec2による音声感情分析 (Arousal / Valence) を実行中...")
         audio_analyzer = AudioAnalyzer()
         
         import soundfile as sf

@@ -3,7 +3,7 @@
 run_step7_integration.py
 ========================
 各ステップで抽出されたテキスト感情、表情特徴、音声特徴、話者分離データをマージし、
-3モダリティの正規化感情スコアおよび「感情の乖離スコア（Discrepancy）」を算出します。
+3モダリティの正規化感情スコア（学術論文準拠）および感情乖離度を算出します。
 
 使い方:
   python scripts/run_step7_integration.py \
@@ -12,7 +12,7 @@ run_step7_integration.py
     [--audio_path output/audio_features.csv] \
     [--diarization_path output/raw/diarization.csv] \
     [--output_path output/integrated_results.csv] \
-    [--governor_id SPEAKER_00]
+    [--governor_id AUTO]
 """
 import argparse
 import logging
@@ -37,7 +37,7 @@ logger = logging.getLogger("Step7-Integration")
 
 def extract_audio_dimension(audio_df: pd.DataFrame, col_name: str) -> pd.Series:
     """
-    Extract a specific emotion dimension (valence, arousal, etc.) from audio features.
+    Extract a specific emotion dimension from audio features.
     """
     df = audio_df.copy()
     if col_name not in df.columns:
@@ -50,16 +50,20 @@ def compute_face_metric(
     face_df: pd.DataFrame,
     starts: pd.Series,
     ends: pd.Series,
-    col_name: str,
+    col_name: str = "face_negative_score",
     fps: float = 30.0,
 ) -> pd.Series:
     """
-    Compute mean of a facial metric (valence, arousal, etc.) over frames in [start, end].
+    Compute mean of a facial metric over frames in [start, end].
+    Curti & Kazinnik (2023) に倣い、face_negative_score (= anger + disgust + fear) の区間平均を計算。
     """
     df = face_df.copy()
     if col_name not in df.columns:
-        logger.warning(f"表情特徴に列 '{col_name}' が見つかりません。表情感情スコアは 0 になります。")
-        return pd.Series(np.zeros(len(starts)), index=starts.index)
+        if set(["anger", "disgust", "fear"]).issubset(df.columns) and col_name == "face_negative_score":
+            df["face_negative_score"] = df["anger"] + df["disgust"] + df["fear"]
+        else:
+            logger.warning(f"表情特徴に列 '{col_name}' が見つかりません。デフォルト値 0.0 になります。")
+            return pd.Series(np.zeros(len(starts)), index=starts.index)
 
     df = df.dropna(subset=[col_name])
     df["timestamp"] = df["frame"] / fps
@@ -119,34 +123,22 @@ def main():
     diar_path = Path(args.diarization_path)
     output_path = Path(args.output_path)
 
-    # 必須ファイルチェック
     if not text_path.exists():
         logger.error(f"テキスト感情ファイルが見つかりません: {text_path}. 先に Step 4 を実行してください。")
         sys.exit(1)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 各データフレームのロード
     logger.info("各種特徴量ファイルをロード中...")
     text_df = pd.read_csv(text_path)
-    
-    facial_df = pd.read_csv(facial_path) if facial_path.exists() else pd.DataFrame(columns=["frame", "AU04", "AU12", "valence", "arousal", "is_blink"])
-    if not facial_path.exists():
-        logger.warning(f"表情ファイル {facial_path} が存在しないため、ダミー値で補完します。")
-        
-    audio_df = pd.read_csv(audio_path) if audio_path.exists() else pd.DataFrame(columns=["sentence_id", "audio_valence", "audio_arousal", "audio_dominance", "jitter", "shimmer", "F0_mean", "loudness"])
-    if not audio_path.exists():
-        logger.warning(f"音声ファイル {audio_path} が存在しないため、ダミー値で補完します。")
-
+    facial_df = pd.read_csv(facial_path) if facial_path.exists() else pd.DataFrame()
+    audio_df = pd.read_csv(audio_path) if audio_path.exists() else pd.DataFrame()
     diar_df = pd.read_csv(diar_path) if diar_path.exists() else pd.DataFrame(columns=["start", "end", "speaker"])
-    if not diar_path.exists():
-        logger.warning(f"話者分離ファイル {diar_path} が存在しないため、ダミー値で補完します。")
 
-    # 1. タイムスタンプに基づくデータ結合 (MultimodalIntegrator)
+    # 1. アライメントとマージ
     integrator = MultimodalIntegrator()
     text_audio = text_df.copy()
     if not audio_df.empty:
-        # sentence_id で text と audio を結合
         text_audio = pd.merge(text_df, audio_df, left_index=True, right_on="sentence_id", how="left")
         
     logger.info("特徴量のアライメントとマージを実行中...")
@@ -157,52 +149,44 @@ def main():
         diarization_df=diar_df
     )
 
-    # 2. スコア正規化・感情乖離度の算出
-    logger.info("3モダリティ感情スコアおよび乖離度(Discrepancy)の計算を実行中...")
+    # 2. スコアおよび変数の設定
+    logger.info("学術論文準拠の3モダリティ感情指標を整理中...")
     
-    # 2-1. text_score (BERT値)
+    # 2-1. text_score
     final_df["text_score"] = final_df["sentiment_score"]
 
-    # 2-2. audio_valence & audio_arousal
+    # 2-2. 音声指標 (Wav2Vec2: audio_arousal, audio_valence)
+    audio_cols = ["audio_arousal", "audio_valence"]
     if not audio_df.empty:
-        audio_val_series = extract_audio_dimension(audio_df, "audio_valence")
-        audio_aro_series = extract_audio_dimension(audio_df, "audio_arousal")
-        final_df["audio_emotion_score"] = final_df["sentence_id"].map(audio_val_series)
-        final_df["audio_arousal_score"] = final_df["sentence_id"].map(audio_aro_series)
+        for col in audio_cols:
+            if col in audio_df.columns:
+                series = extract_audio_dimension(audio_df, col)
+                final_df[col] = final_df["sentence_id"].map(series)
+            else:
+                final_df[col] = np.nan
     else:
-        final_df["audio_emotion_score"] = 0.0
-        final_df["audio_arousal_score"] = 0.0
-    final_df["audio_emotion_score"] = final_df["audio_emotion_score"].fillna(0.0)
-    final_df["audio_arousal_score"] = final_df["audio_arousal_score"].fillna(0.0)
+        for col in audio_cols:
+            final_df[col] = np.nan
 
-    # 2-3. face_valence & face_arousal
+    # 2-3. 表情ネガティブ指標 (face_negative_score)
     if not facial_df.empty:
-        final_df["face_emotion_score"] = compute_face_metric(
+        final_df["face_negative_score"] = compute_face_metric(
             facial_df,
             starts=final_df["start"],
             ends=final_df["end"],
-            col_name="valence"
-        )
-        final_df["face_arousal_score"] = compute_face_metric(
-            facial_df,
-            starts=final_df["start"],
-            ends=final_df["end"],
-            col_name="arousal"
+            col_name="face_negative_score"
         )
     else:
-        final_df["face_emotion_score"] = 0.0
-        final_df["face_arousal_score"] = 0.0
-    final_df["face_emotion_score"] = final_df["face_emotion_score"].fillna(0.0)
-    final_df["face_arousal_score"] = final_df["face_arousal_score"].fillna(0.0)
+        final_df["face_negative_score"] = 0.0
+    final_df["face_negative_score"] = final_df["face_negative_score"].fillna(0.0)
 
-    # 2-4. is_governor (Auto-detect if needed)
+    # 2-4. is_governor
     governor_id = args.governor_id
     if governor_id == "AUTO" and not diar_df.empty:
-        # Calculate total duration for each speaker to auto-detect the main speaker (governor)
         diar_df["duration"] = diar_df["end"] - diar_df["start"]
         speaker_durations = diar_df.groupby("speaker")["duration"].sum()
         governor_id = speaker_durations.idxmax()
-        logger.info(f"総裁の話者IDを自動判定しました: {governor_id} (総発言時間: {speaker_durations[governor_id]:.1f}秒)")
+        logger.info(f"総裁の話者IDを自動判定しました: {governor_id}")
     elif governor_id == "AUTO":
         governor_id = "SPEAKER_00"
         
@@ -211,26 +195,31 @@ def main():
     else:
         final_df["is_governor"] = False
 
-    # 2-5. 乖離度 (Discrepancy) - Valence同士の絶対差を計算
+    # 2-5. 乖離度 (Discrepancy)
     t = final_df["text_score"]
-    a = final_df["audio_emotion_score"]
-    f = final_df["face_emotion_score"]
+    a = final_df["audio_valence"].fillna(0.0)
+    f_val = -final_df["face_negative_score"]
 
-    final_df["discrepancy_score"] = (t - a).abs() + (t - f).abs()
-    final_df["discrepancy_score_3"] = final_df["discrepancy_score"] + (a - f).abs()
+    final_df["discrepancy_score"] = (t - a).abs() + (t - f_val).abs()
+    final_df["discrepancy_score_3"] = final_df["discrepancy_score"] + (a - f_val).abs()
 
-    # 3. 統合データの保存
+    # 旧独自カラムおよび OpenSMILE パラメータをドロップ
+    drop_cols = ["audio_emotion_score", "face_emotion_score", "face_arousal_score", "F0_mean", "jitter", "shimmer", "loudness"]
+    for col in drop_cols:
+        if col in final_df.columns:
+            final_df.drop(columns=[col], inplace=True)
+
+    # 保存
     final_df.to_csv(output_path, index=False)
     logger.info(f"データ統合完了。結果保存先: {output_path} (行数: {len(final_df)})")
 
-    # 統計サマリーの表示
     new_cols = [
-        "text_score", "audio_emotion_score", "audio_arousal_score",
-        "face_emotion_score", "face_arousal_score",
-        "is_governor", "discrepancy_score", "discrepancy_score_3"
+        "text_score", "face_negative_score", "audio_arousal", "audio_valence",
+        "is_governor", "discrepancy_score"
     ]
+    avail_cols = [c for c in new_cols if c in final_df.columns]
     print("\n=== 統合感情スコアサマリー ===")
-    print(final_df[new_cols].describe().round(4))
+    print(final_df[avail_cols].describe().round(4))
     print(f"\n総裁 (governor) の発話行数: {final_df['is_governor'].sum()} / 全発話数 {len(final_df)}")
 
 if __name__ == "__main__":

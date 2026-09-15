@@ -154,31 +154,22 @@ class FacialAnalyzer:
             except (IndexError, ValueError):
                 continue
             
-            # Action Units: AU04 (Brow Lowerer), AU12 (Lip Corner Puller)
+            # Action Units
             au4 = row.get("AU04", np.nan)
             au12 = row.get("AU12", np.nan)
+
+            # Basic Emotions (Py-Feat probability outputs)
+            anger = float(row.get("anger", row.get("angry", 0.0)))
+            disgust = float(row.get("disgust", 0.0))
+            fear = float(row.get("fear", 0.0))
+            happiness = float(row.get("happiness", row.get("happy", 0.0)))
+            sadness = float(row.get("sadness", row.get("sad", 0.0)))
+            surprise = float(row.get("surprise", 0.0))
+            neutral = float(row.get("neutral", 0.0))
             
-            # Basic Emotions
-            happy = row.get("happiness", row.get("happy", 0.0))
-            angry = row.get("anger", row.get("angry", 0.0))
-            sad = row.get("sadness", row.get("sad", 0.0))
-            fear = row.get("fear", 0.0)
-            disgust = row.get("disgust", 0.0)
-            surprise = row.get("surprise", 0.0)
-            neutral = row.get("neutral", 0.0)
-            
-            # Valence & Arousal extraction & fallbacks
-            valence = row.get("valence", np.nan)
-            arousal = row.get("arousal", np.nan)
-            
-            if pd.isna(valence) or valence is None:
-                # Valence fallback calculation: positive - negatives
-                valence = float(happy) - float(angry + disgust + fear + sad)
-                
-            if pd.isna(arousal) or arousal is None:
-                # Arousal fallback calculation: active/tension - passive/镇静
-                arousal = float(angry + fear + surprise) - float(neutral + sad)
-            
+            # Curti & Kazinnik (2023) 準拠: Negative Facial Score
+            face_negative_score = anger + disgust + fear
+
             # Blink Detection via EAR
             ear = 0.3 # Default open
             if 'landmarks' in row and row['landmarks'] is not None:
@@ -193,10 +184,16 @@ class FacialAnalyzer:
             
             output_data.append({
                 "frame": frame_id,
+                "anger": anger,
+                "disgust": disgust,
+                "fear": fear,
+                "happiness": happiness,
+                "sadness": sadness,
+                "surprise": surprise,
+                "neutral": neutral,
+                "face_negative_score": face_negative_score,
                 "AU04": au4,
                 "AU12": au12,
-                "valence": valence,
-                "arousal": arousal,
                 "EAR": ear,
                 "is_blink": 1 if ear < 0.20 else 0
             })
