@@ -5,6 +5,14 @@
 cd "$(dirname "$0")"
 mkdir -p static
 
+# ── 古いプロセス・ポートのクリーンアップ ──────────────────────────
+echo "🧹 残存プロセス (port 8000 / 8501) をクリーンアップ中..."
+lsof -ti:8501 | xargs kill -9 2>/dev/null || true
+lsof -ti:8000 | xargs kill -9 2>/dev/null || true
+fuser -k 8000/tcp 2>/dev/null || true
+fuser -k 8501/tcp 2>/dev/null || true
+sleep 1
+
 # ── 動画をstaticに準備（faststartへの変換も試みる） ──────────────
 VIDEO_SRC="data/boj_conference.mp4"
 VIDEO_DST="static/boj_conference.mp4"
@@ -35,10 +43,6 @@ else
 fi
 
 # ── Range Request 対応動画サーバーを起動（port 8000） ────────────
-echo "🧹 古い動画サーバーが残っている場合はクリーンアップします..."
-fuser -k 8000/tcp 2>/dev/null || true
-sleep 1
-
 echo "🌐 Range-capable 動画サーバーを起動中 (port 8000)..."
 python3 video_server.py 8000 static &
 VIDEO_SERVER_PID=$!
@@ -54,10 +58,10 @@ fi
 # ── Streamlit ────────────────────────────────────────────────────
 echo ""
 echo "🚀 Streamlit を起動中 (port 8501)..."
-echo "   ブラウザ: http://localhost:8501"
+echo "   ブラウザ: http://127.0.0.1:8501 または http://localhost:8501"
 echo ""
-streamlit run app_viewer.py
+.venv/bin/streamlit run app_viewer.py --server.address 127.0.0.1 --server.port 8501
 
 # Streamlit が終了したら動画サーバーも止める
 echo "🛑 動画サーバーを停止中..."
-kill $VIDEO_SERVER_PID 2>/dev/null
+kill -9 $VIDEO_SERVER_PID 2>/dev/null

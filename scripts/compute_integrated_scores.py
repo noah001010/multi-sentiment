@@ -57,12 +57,26 @@ def compute_face_negative_score(
 
     df = df.dropna(subset=["face_negative_score"])
     df["timestamp"] = df["frame"] / fps
+    df = df.sort_values("timestamp")
 
     scores = []
+    timestamps = df["timestamp"].values
+    vals = df["face_negative_score"].values
+
     for start, end in zip(starts, ends):
-        mask = (df["timestamp"] >= start) & (df["timestamp"] <= end)
-        subset = df.loc[mask, "face_negative_score"]
-        scores.append(float(subset.mean()) if not subset.empty else float("nan"))
+        # 1. 区間内または周辺ウィンドウ [start - 2.0, end + 2.0] 内のフレームを検索
+        mask = (timestamps >= (start - 2.0)) & (timestamps <= (end + 2.0))
+        subset_vals = vals[mask]
+
+        if len(subset_vals) > 0:
+            scores.append(float(np.mean(subset_vals)))
+        else:
+            # 2. 周辺に無い場合は、発話開始時間に最も近いタイムスタンプのフレーム値を適用
+            if len(timestamps) > 0:
+                idx = np.argmin(np.abs(timestamps - start))
+                scores.append(float(vals[idx]))
+            else:
+                scores.append(0.0)
 
     return pd.Series(scores, index=starts.index)
 

@@ -50,7 +50,6 @@ try:
     from feat import Detector
 except ImportError:
     from feat import Detectorv1 as Detector
-from scipy.spatial import distance
 
 def check_cuda_working() -> bool:
     import torch
@@ -61,41 +60,93 @@ def check_cuda_working() -> bool:
         y = torch.nn.functional.linear(x, x)
         return True
     except Exception as e:
-        logger.warning(f"CUDA is available in PyTorch, but kernel execution failed (e.g. GPU compute capability mismatch): {e}. Falling back to CPU for safety.")
+        logger.warning(f"CUDA is available in PyTorch, but kernel execution failed: {e}. Falling back to CPU for safety.")
         return False
 
 logger = logging.getLogger(__name__)
+
+def format_time_str(seconds: float) -> str:
+    """seconds (float) を 'MM:SS' フォーマットに変換する"""
+    sec = max(0, int(seconds))
+    mins = sec // 60
+    secs = sec % 60
+    return f"{mins:02d}:{secs:02d}"
+
 
 class FacialAnalyzer:
     def __init__(self):
         """
         Initialize Py-Feat Detector.
-        We use 'retinaface' for detection, 'resnet' for AUs.
+        Uses 'retinaface' for detection, 'resmasknet' for basic emotions.
         """
         device = "cuda" if check_cuda_working() else "cpu"
         logger.info(f"Initializing Py-Feat Detector on {device}...")
-        # SOTA Setup: RetinaFace for detection, ResNet-50 for AUs (Higher precision than SVM/RF)
         self.detector = Detector(
             face_model="retinaface",
             landmark_model="mobilefacenet",
-            au_model="xgb", # High precision model available in this environment
+            au_model="xgb",
             emotion_model="resmasknet",
             device=device
         )
-        
-    def calculate_ear(self, eye_points):
-        """Calculate Eye Aspect Ratio."""
-        # eye_points has shape (6, 2)
-        A = distance.euclidean(eye_points[1], eye_points[5])
-        B = distance.euclidean(eye_points[2], eye_points[4])
-        C = distance.euclidean(eye_points[0], eye_points[3])
-        ear = (A + B) / (2.0 * C)
-        return ear
 
-    def process_face_crops(self, crop_dir: str, batch_size: int = 256) -> pd.DataFrame:
+    def process_video(self, video_path: str, skip_frames: int = 1, fps: float = 30.0) -> pd.DataFrame:
         """
-        Process a directory of face crops to extract AUs, Valence/Arousal, and Blink info.
-        Assumes filenames are formatted as 'face_{frame_id:06d}.jpg'.
+        Process a full video directly without face crop extraction.
+        Extracts 7 basic emotion probabilities and computes face_negative_score for each frame.
+        Includes 'frame', 'timestamp' (seconds), and 'time_str' (MM:SS).
+        """
+        logger.info(f"Processing full video directly: {video_path} (fps={fps}, skip_frames={skip_frames})...")
+        
+        try:
+            # Py-Feat video detection
+            if hasattr(self.detector, "detect_video"):
+                detected = self.detector.detect_video(video_path, skip_frames=skip_frames)
+            else:
+                detected = self.detector.detect(video_path, skip_frames=skip_frames)
+        except Exception as e:
+            logger.error(f"Error executing Py-Feat detect_video on {video_path}: {e}")
+            return pd.DataFrame()
+
+        if detected is None or len(detected) == 0:
+            logger.warning(f"No face detections in video: {video_path}")
+            return pd.DataFrame()
+
+        output_data = []
+        for idx, row in detected.iterrows():
+            frame_id = int(row.get("frame", idx * skip_frames))
+            timestamp = frame_id / fps
+            time_str = format_time_str(timestamp)
+
+            anger = float(row.get("anger", row.get("angry", 0.0)))
+            disgust = float(row.get("disgust", 0.0))
+            fear = float(row.get("fear", 0.0))
+            happiness = float(row.get("happiness", row.get("happy", 0.0)))
+            sadness = float(row.get("sadness", row.get("sad", 0.0)))
+            surprise = float(row.get("surprise", 0.0))
+            neutral = float(row.get("neutral", 0.0))
+
+            # Curti & Kazinnik (2023) 準拠: Negative Facial Score
+            face_negative_score = anger + disgust + fear
+
+            output_data.append({
+                "frame": frame_id,
+                "timestamp": round(timestamp, 2),
+                "time_str": time_str,
+                "anger": anger,
+                "disgust": disgust,
+                "fear": fear,
+                "happiness": happiness,
+                "sadness": sadness,
+                "surprise": surprise,
+                "neutral": neutral,
+                "face_negative_score": face_negative_score
+            })
+
+        return pd.DataFrame(output_data).sort_values("frame")
+
+    def process_face_crops(self, crop_dir: str, batch_size: int = 256, fps: float = 30.0) -> pd.DataFrame:
+        """
+        Backward compatible crop folder processing with timestamp and time_str.
         """
         image_paths = sorted(list(Path(crop_dir).glob("*.jpg")))
         if not image_paths:
@@ -103,30 +154,16 @@ class FacialAnalyzer:
             return pd.DataFrame()
             
         logger.info(f"Processing {len(image_paths)} face crops...")
-        
-        # Py-Feat batch processing
-        # Note: detector.detect_image can take a list of filenames
-        # For large lists, we should batch.
-        # RTX 5080 (16GB) can handle large batches. Let's aim for 256.
-        all_results = []
-        
         path_strs = [str(p) for p in image_paths]
         
-        from tqdm import tqdm
-        logger.info(f"Batch processing {len(path_strs)} images (batch_size={batch_size})...")
-        
-        # Iterate in batches
-        for i in tqdm(range(0, len(path_strs), batch_size), desc="Facial AU Analysis"):
+        all_results = []
+        for i in range(0, len(path_strs), batch_size):
             batch_files = path_strs[i:i+batch_size]
             try:
-                # Compatibility across py-feat versions:
-                # v2.0+ uses .detect(inputs)
-                # v0.6.x uses .detect_image(inputs)
                 if hasattr(self.detector, "detect"):
                     detected = self.detector.detect(batch_files, batch_size=batch_size, output_size=(224, 224), progress_bar=False)
                 else:
                     detected = self.detector.detect_image(batch_files, batch_size=batch_size)
-                # Results is a DataFrame
                 all_results.append(detected)
             except Exception as e:
                 logger.error(f"Error processing batch {i}: {e}")
@@ -136,29 +173,18 @@ class FacialAnalyzer:
             return pd.DataFrame()
             
         combined_df = pd.concat(all_results, ignore_index=True)
-        
-        # Post-process: Extract useful columns and calculate EAR
         output_data = []
         
-        # In Py-Feat, combined_df has an 'input' column containing the file path
-        # or 'frame' / 'filename' depending on the version.
-        
-        for _, row in combined_df.iterrows():
+        for idx, row in combined_df.iterrows():
             filepath = row.get("input", "")
-            if not filepath:
-                # Fallback: if 'input' is missing, skip row
-                continue
-                
             try:
                 frame_id = int(Path(filepath).stem.split('_')[1])
             except (IndexError, ValueError):
-                continue
-            
-            # Action Units
-            au4 = row.get("AU04", np.nan)
-            au12 = row.get("AU12", np.nan)
+                frame_id = idx
 
-            # Basic Emotions (Py-Feat probability outputs)
+            timestamp = frame_id / fps
+            time_str = format_time_str(timestamp)
+
             anger = float(row.get("anger", row.get("angry", 0.0)))
             disgust = float(row.get("disgust", 0.0))
             fear = float(row.get("fear", 0.0))
@@ -167,23 +193,12 @@ class FacialAnalyzer:
             surprise = float(row.get("surprise", 0.0))
             neutral = float(row.get("neutral", 0.0))
             
-            # Curti & Kazinnik (2023) 準拠: Negative Facial Score
             face_negative_score = anger + disgust + fear
-
-            # Blink Detection via EAR
-            ear = 0.3 # Default open
-            if 'landmarks' in row and row['landmarks'] is not None:
-                try:
-                    lms = np.array(row['landmarks'])
-                    if lms.ndim == 2 and lms.shape[0] == 68:
-                        left_eye = lms[36:42]
-                        right_eye = lms[42:48]
-                        ear = (self.calculate_ear(left_eye) + self.calculate_ear(right_eye)) / 2.0
-                except:
-                    pass
             
             output_data.append({
                 "frame": frame_id,
+                "timestamp": round(timestamp, 2),
+                "time_str": time_str,
                 "anger": anger,
                 "disgust": disgust,
                 "fear": fear,
@@ -191,15 +206,11 @@ class FacialAnalyzer:
                 "sadness": sadness,
                 "surprise": surprise,
                 "neutral": neutral,
-                "face_negative_score": face_negative_score,
-                "AU04": au4,
-                "AU12": au12,
-                "EAR": ear,
-                "is_blink": 1 if ear < 0.20 else 0
+                "face_negative_score": face_negative_score
             })
             
         return pd.DataFrame(output_data).sort_values("frame")
 
+
 if __name__ == "__main__":
-    # Test stub
     pass

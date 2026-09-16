@@ -67,12 +67,24 @@ def compute_face_metric(
 
     df = df.dropna(subset=[col_name])
     df["timestamp"] = df["frame"] / fps
+    df = df.sort_values("timestamp")
 
     scores = []
+    timestamps = df["timestamp"].values
+    vals = df[col_name].values
+
     for start, end in zip(starts, ends):
-        mask = (df["timestamp"] >= start) & (df["timestamp"] <= end)
-        subset = df.loc[mask, col_name]
-        scores.append(float(subset.mean()) if not subset.empty else float("nan"))
+        mask = (timestamps >= (start - 2.0)) & (timestamps <= (end + 2.0))
+        subset_vals = vals[mask]
+
+        if len(subset_vals) > 0:
+            scores.append(float(np.mean(subset_vals)))
+        else:
+            if len(timestamps) > 0:
+                idx = np.argmin(np.abs(timestamps - start))
+                scores.append(float(vals[idx]))
+            else:
+                scores.append(0.0)
 
     return pd.Series(scores, index=starts.index)
 
@@ -80,33 +92,39 @@ def compute_face_metric(
 def main():
     parser = argparse.ArgumentParser(description="Step 7: マルチモーダルデータ統合")
     parser.add_argument(
+        "--date_code",
+        type=str,
+        default="23_0616",
+        help="会見日付コード (例: 23_0616)",
+    )
+    parser.add_argument(
         "--text_path",
         type=str,
-        default="output/text_features.csv",
+        default=None,
         help="Step 4 で出力したテキスト感情CSVのパス",
     )
     parser.add_argument(
         "--facial_path",
         type=str,
-        default="output/facial_features_clean.csv",
+        default=None,
         help="Step 5 で出力した表情特徴量CSVのパス",
     )
     parser.add_argument(
         "--audio_path",
         type=str,
-        default="output/audio_features.csv",
+        default=None,
         help="Step 6 で出力した音声特徴量CSVのパス",
     )
     parser.add_argument(
         "--diarization_path",
         type=str,
-        default="output/raw/diarization.csv",
+        default=None,
         help="Step 2 で出力した話者分離CSVのパス",
     )
     parser.add_argument(
         "--output_path",
         type=str,
-        default="output/integrated_results.csv",
+        default=None,
         help="最終統合結果CSVの保存パス",
     )
     parser.add_argument(
@@ -117,15 +135,21 @@ def main():
     )
     args = parser.parse_args()
 
-    text_path = Path(args.text_path)
-    facial_path = Path(args.facial_path)
-    audio_path = Path(args.audio_path)
-    diar_path = Path(args.diarization_path)
-    output_path = Path(args.output_path)
+    date_dir = Path("output") / args.date_code
 
-    if not text_path.exists():
-        logger.error(f"テキスト感情ファイルが見つかりません: {text_path}. 先に Step 4 を実行してください。")
-        sys.exit(1)
+    def resolve_path(arg_path, candidates):
+        if arg_path:
+            return Path(arg_path)
+        for cand in candidates:
+            if cand.exists():
+                return cand
+        return candidates[0]
+
+    text_path = resolve_path(args.text_path, [date_dir / "text" / "text_features.csv", Path("output/text_features.csv")])
+    facial_path = resolve_path(args.facial_path, [date_dir / "face" / "facial_features.csv", date_dir / "face" / "facial_features_clean.csv", Path("output/facial_features_clean.csv"), Path("output/facial_features.csv")])
+    audio_path = resolve_path(args.audio_path, [date_dir / "audio" / "audio_features.csv", Path("output/audio_features.csv")])
+    diar_path = resolve_path(args.diarization_path, [date_dir / "text" / "diarization.csv", Path("output/raw/diarization.csv")])
+    output_path = Path(args.output_path) if args.output_path else date_dir / "integrated_results.csv"
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 

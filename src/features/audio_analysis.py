@@ -92,16 +92,14 @@ class AudioAnalyzer:
                 
             logits_np = logits.squeeze(0).cpu().numpy()
             
-            # audeering outputs: 0=Arousal, 1=Valence, 2=Dominance
+            # audeering outputs: 0=Arousal, 1=Valence
             result["audio_arousal"] = float(logits_np[0])
             result["audio_valence"] = float(logits_np[1])
-            result["audio_dominance"] = float(logits_np[2])
             
         except Exception as e:
             logger.error(f"Wav2Vec2 extraction error for {audio_path}: {e}")
             result["audio_arousal"] = 0.0
             result["audio_valence"] = 0.0
-            result["audio_dominance"] = 0.0
 
         return result
 

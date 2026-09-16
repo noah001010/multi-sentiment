@@ -24,7 +24,7 @@ st.markdown("""
     }
     [data-testid="stSidebar"] * { color: #0f172a !important; }
     
-    /* タイトルのグラデーション（少し濃い目に） */
+    /* タイトルのグラデーション */
     h1, h2, h3 {
         background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
         -webkit-background-clip: text;
@@ -65,7 +65,7 @@ def alias(df, target, candidates):
         df[target] = 0.0
 
 
-# ── Chart.js をインライン埋め込み（CDN依存・タイミング問題を完全排除）──
+# ── Chart.js をインライン埋め込み ──
 STATIC_DIR = Path("static")
 STATIC_DIR.mkdir(exist_ok=True)
 CHARTJS_PATH = STATIC_DIR / "chart.umd.min.js"
@@ -91,16 +91,33 @@ def get_chartjs_script():
 chartjs_script = get_chartjs_script()
 
 
-# ── 固定設定 ──
+# ── 設定 & パス自動判定 ──
 VIDEO_PATH = "data/boj_conference.mp4"
-INTEG_PATH = "output/integrated_results.csv"
 FOREX_PATH = "data/DAT_ASCII_USDJPY_M1_2023.csv"
 START_STR  = "2023-06-16 15:30:00"
 
-# ── サイドバー ──
+# output ディレクトリ内の日付フォルダ候補を取得
+output_base = Path("output")
+date_folders = [d.name for d in output_base.glob("*") if d.is_dir() and (d / "integrated_results.csv").exists()]
+if "23_0616" in date_folders:
+    default_date = "23_0616"
+elif date_folders:
+    default_date = date_folders[0]
+else:
+    default_date = None
+
+# サイドバーで日付選択
 with st.sidebar:
     st.header("⚡ System Status")
-    st.success("Pipeline: ONLINE")
+    st.success("Pipeline: ONLINE (Academic Standard Version)")
+    if date_folders:
+        selected_date = st.selectbox("分析対象の会見日付", date_folders, index=date_folders.index(default_date) if default_date in date_folders else 0)
+        INTEG_PATH = str(output_base / selected_date / "integrated_results.csv")
+    elif (output_base / "integrated_results.csv").exists():
+        INTEG_PATH = str(output_base / "integrated_results.csv")
+    else:
+        INTEG_PATH = "output/23_0616/integrated_results.csv"
+
     st.code(f"Video : {VIDEO_PATH}\nCSV   : {INTEG_PATH}\nForex : {FOREX_PATH}\nStart : {START_STR}")
 
 for p in [INTEG_PATH, FOREX_PATH]:
@@ -112,21 +129,12 @@ for p in [INTEG_PATH, FOREX_PATH]:
 df = pd.read_csv(INTEG_PATH)
 df_fin = load_forex(FOREX_PATH, START_STR)
 
-# 列名吸収
+# 学術新指標への列名吸収
 alias(df, 'text',               ['sentence','content','transcript'])
 alias(df, 'text_score',         ['sentiment_score','text_score_mean','sentiment'])
-if 'face_valence' in df.columns and 'face_emotion_score' not in df.columns:
-    df['face_emotion_score'] = df['face_valence']
-if 'audio_valence' in df.columns and 'audio_emotion_score' not in df.columns:
-    # 音声の感情値（Valence）は変動幅が小さいため、他の指標とスケールを合わせるために標準化（または定数倍）する
-    std_val = df['audio_valence'].std()
-    if pd.notna(std_val) and std_val > 0:
-        # Zスコア化(平均0, 標準偏差1)したあと、グラフに収まりやすいよう3で割る（-1〜1の範囲に収めるため）
-        df['audio_emotion_score'] = ((df['audio_valence'] - df['audio_valence'].mean()) / std_val) / 3.0
-    else:
-        df['audio_emotion_score'] = df['audio_valence']
-alias(df, 'audio_emotion_score',['audio_valence','audio_sentiment'])
-alias(df, 'audio_arousal_score',['audio_arousal'])
+alias(df, 'face_negative_score', ['face_negative','face_neg','face_emotion_score'])
+alias(df, 'audio_valence',       ['audio_emotion_score','audio_val'])
+alias(df, 'audio_arousal',       ['audio_arousal_score','audio_aro'])
 alias(df, 'start',              ['start_time','start_sec'])
 alias(df, 'end',                ['end_time','end_sec'])
 
@@ -138,10 +146,14 @@ elif 'speaker' in df.columns:
 else:
     df['is_governor'] = False
 
-# NaN クレンジング
-for col in ['start','end','text_score','face_emotion_score','face_arousal_score',
-            'audio_emotion_score','audio_arousal_score']:
-    df[col] = df[col].fillna(0.0)
+# 安全な NaN クレンジング (KeyError 防御)
+target_cols = ['start', 'end', 'text_score', 'face_negative_score', 'audio_valence', 'audio_arousal']
+for col in target_cols:
+    if col in df.columns:
+        df[col] = df[col].fillna(0.0)
+    else:
+        df[col] = 0.0
+
 df['text'] = df['text'].fillna('').astype(str)
 
 # ── 動画 ──
@@ -156,15 +168,8 @@ t0 = pd.to_datetime(START_STR)
 df['datetime'] = t0 + pd.to_timedelta(df['start'], unit='s')
 df_1min = df.set_index('datetime').resample('1min').mean(numeric_only=True).reset_index()
 
-avail = [v for v in ['text_score','face_emotion_score','audio_emotion_score',
-                     'face_arousal_score','audio_arousal_score'] if v in df_1min.columns]
+avail = [v for v in ['text_score','face_negative_score','audio_valence','audio_arousal'] if v in df_1min.columns]
 df_m = pd.merge(df_fin, df_1min, on='datetime', how='inner').dropna(subset=['return']+avail)
-
-# 1分足に平均化するとノイズが相殺されて分散が極端に小さくなるため、再度標準化してスケールを合わせる
-if 'audio_emotion_score' in df_m.columns:
-    m_std = df_m['audio_emotion_score'].std()
-    if pd.notna(m_std) and m_std > 0:
-        df_m['audio_emotion_score'] = ((df_m['audio_emotion_score'] - df_m['audio_emotion_score'].mean()) / m_std) / 2.5
 
 df_p = df_m.copy()
 
@@ -175,8 +180,9 @@ for _, row in df_p.iterrows():
         "m":         round(safe_float(mins), 2),
         "close":     round(safe_float(row['close']), 4),
         "text":      round(safe_float(row.get('text_score', 0)), 4),
-        "face_val":  round(safe_float(row.get('face_emotion_score', 0)), 4),
-        "audio_val": round(safe_float(row.get('audio_emotion_score', 0)), 4),
+        "face_neg":  round(safe_float(row.get('face_negative_score', 0)), 4),
+        "audio_val": round(safe_float(row.get('audio_valence', 0)), 4),
+        "audio_aro": round(safe_float(row.get('audio_arousal', 0)), 4),
     })
 chart_json = json.dumps(chart_data)
 
@@ -203,7 +209,7 @@ for _, row in df.iterrows():
     <span style="color:#818cf8;font-family:monospace;text-decoration:underline;cursor:pointer" onclick="event.stopPropagation();seekTo({start_s})">{fmt_time(start_s)}</span>
   </div>
   <p class="card-text" style="font-size:13px;line-height:1.5;margin:0">{text}</p>
-  <div style="font-size:10px;font-family:monospace;color:#6366f1;margin-top:4px">感情スコア: {sign}{score:.2f}</div>
+  <div style="font-size:10px;font-family:monospace;color:#6366f1;margin-top:4px">言語感情スコア: {sign}{score:.2f}</div>
 </div>
 """
 
@@ -214,10 +220,9 @@ with st.sidebar:
     chartjs_ok = "✅ ローカル" if CHARTJS_PATH.exists() else "⚠️ CDN"
     st.markdown(f"**Chart.js:** {chartjs_ok}")
 
-st.title("日銀総裁会見 マルチモーダル感情分析")
+st.title("日銀総裁会見 マルチモーダル感情分析（学術論文準拠版）")
 
 # ── HTML ダッシュボード ──
-# 常にライトモードを使用するように変数を固定
 custom_html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -225,7 +230,6 @@ custom_html = f"""<!DOCTYPE html>
 {chartjs_script}
 <style>
 :root {{
-  /* ライトモード (ポスター用・常時) */
   --bg: #f8fafc;
   --text: #0f172a;
   --panel-bg: #ffffff;
@@ -285,10 +289,9 @@ body {{
 </head>
 <body>
 
-<!-- 配置転換: 左に動画(55%)、右にテキスト・グラフ(45%) -->
 <div style="display:grid;grid-template-columns:55% 45%;gap:12px;height:750px;">
 
-  <!-- 左: 動画 (一番大きく) -->
+  <!-- 左: 動画 -->
   <div class="panel" style="padding:12px;display:flex;justify-content:center;align-items:center;background:#000;">
     <video id="vid" controls preload="metadata"
            style="width:100%;height:100%;object-fit:contain;border-radius:8px;">
@@ -297,10 +300,10 @@ body {{
     </video>
   </div>
 
-  <!-- 右: 発言内容(上部) ＋ グラフ(下部) -->
+  <!-- 右: 発言内容 ＋ グラフ -->
   <div style="display:flex;flex-direction:column;gap:12px;height:100%;overflow:hidden">
     
-    <!-- 右上: 発言内容 (自動スクロール) -->
+    <!-- 右上: 発言内容 -->
     <div class="panel" style="padding:12px;flex:1;display:flex;flex-direction:column;min-height:0">
       <div style="color:var(--sp-gov);font-weight:bold;font-size:14px;padding-bottom:8px;border-bottom:1px solid var(--border-light);margin-bottom:8px;flex-shrink:0">
         発言内容 (自動同期)
@@ -313,7 +316,7 @@ body {{
     <!-- 右下1: 感情分析チャート -->
     <div class="panel" style="padding:10px 12px 4px;height:220px;display:flex;flex-direction:column;flex-shrink:0">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;flex-shrink:0">
-        <span style="color:var(--text);font-weight:bold;font-size:13px">感情スコアの推移（クリックで動画連動）</span>
+        <span style="color:var(--text);font-weight:bold;font-size:13px">学術感情指標の推移（クリックで動画連動）</span>
         <span id="timedisp" style="font-family:monospace;font-size:12px;background:var(--card-other-bg);padding:3px 10px;border-radius:6px;border:1px solid var(--border-light);color:var(--text)">00:00</span>
       </div>
       <div style="flex:1;min-height:0;position:relative">
@@ -350,7 +353,6 @@ function seekTo(t) {{
   if (p && typeof p.catch === 'function') {{ p.catch(function(){{}}); }}
 }}
 
-// グラフクリック連動関数
 function onChartClick(e, elements, chart) {{
   if (!elements || !elements.length) return;
   var dataIndex = elements[0].index;
@@ -370,7 +372,6 @@ function onChartClick(e, elements, chart) {{
 
   var currentMin = 0;
 
-  // 再生位置縦線プラグイン
   var vlPlugin = {{
     id: 'vl',
     afterDraw: function(c) {{
@@ -403,18 +404,17 @@ function onChartClick(e, elements, chart) {{
       ctx.lineTo(px, ya.bottom);
       ctx.lineWidth = 2;
       ctx.setLineDash([5, 4]);
-      ctx.strokeStyle = 'rgba(0,0,0,0.6)'; // ライトモード用
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
       ctx.stroke();
       ctx.restore();
     }}
   }};
   
-  // Y軸の幅を強制固定して、上のグラフと下のグラフのX軸を揃えるプラグイン
   var syncAxisPlugin = {{
     id: 'syncAxis',
     beforeLayout: function(chart) {{
       chart.options.scales.y.afterFit = function(axis) {{
-        axis.width = 60; // Y軸の幅を60pxに固定
+        axis.width = 60;
       }};
     }}
   }};
@@ -427,12 +427,14 @@ function onChartClick(e, elements, chart) {{
     data: {{
       labels: chartData.map(function(d){{ return d.m; }}),
       datasets: [
-        {{ label:'言語感情', data: chartData.map(function(d){{ return d.text; }}),
+        {{ label:'言語感情 (FinBERT)', data: chartData.map(function(d){{ return d.text; }}),
            borderColor:'#2ecc71', backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3, hitRadius: 10 }},
-        {{ label:'表情感情', data: chartData.map(function(d){{ return d.face_val; }}),
+        {{ label:'表情ネガティブ (Py-Feat)', data: chartData.map(function(d){{ return d.face_neg; }}),
            borderColor:'#e74c3c', backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3, hitRadius: 10 }},
-        {{ label:'音声感情', data: chartData.map(function(d){{ return d.audio_val; }}),
-           borderColor:'#3b82f6', backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3, hitRadius: 10 }}
+        {{ label:'音声感情価 (Wav2Vec2)', data: chartData.map(function(d){{ return d.audio_val; }}),
+           borderColor:'#3b82f6', backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3, hitRadius: 10 }},
+        {{ label:'音声覚醒度 (Wav2Vec2)', data: chartData.map(function(d){{ return d.audio_aro; }}),
+           borderColor:'#8e44ad', backgroundColor:'transparent', borderWidth:1.5, borderDash:[4,4], pointRadius:0, tension:0.3, hitRadius: 10 }}
       ]
     }},
     options: {{
@@ -442,7 +444,7 @@ function onChartClick(e, elements, chart) {{
       scales: {{
         x: {{ min: 0, max: 60, ticks: {{ color:'#64748b', maxTicksLimit:10, font:{{ size:10 }} }}, grid: {{ color:'rgba(0,0,0,0.05)' }} }},
         y: {{ position: 'left', title: {{ display:true, text:'感情スコア', color:'#64748b', font:{{ size:10 }} }},
-              grid: {{ color:'rgba(0,0,0,0.05)' }}, ticks: {{ color:'#64748b', font:{{ size:10 }} }} }}
+               grid: {{ color:'rgba(0,0,0,0.05)' }}, ticks: {{ color:'#64748b', font:{{ size:10 }} }} }}
       }},
       plugins: {{ legend: {{ position:'top', align:'start', labels: {{ color:'#334155', boxWidth:10, font:{{ size:10 }}, padding:8 }} }} }}
     }}
@@ -464,13 +466,12 @@ function onChartClick(e, elements, chart) {{
       interaction: {{ mode:'index', intersect:false }},
       scales: {{
         x: {{ min: 0, max: 60, ticks: {{ color:'#64748b', maxTicksLimit:10, font:{{ size:9 }} }}, grid: {{ color:'rgba(0,0,0,0.05)' }} }},
-        y: {{ position: 'left', ticks: {{ color:'#f59e0b', font:{{ size:9 }}, maxTicksLimit:4 }}, grid: {{ color:'rgba(0,0,0,0.05)' }} }} // y軸をleftに揃える
+        y: {{ position: 'left', ticks: {{ color:'#f59e0b', font:{{ size:9 }}, maxTicksLimit:4 }}, grid: {{ color:'rgba(0,0,0,0.05)' }} }}
       }},
       plugins: {{ legend: {{ display:false }} }}
     }}
   }});
 
-  // ── 動画時間連動・オートスクロール ──
   var lastActiveCard = null;
   var cards = Array.from(document.querySelectorAll('.card-base'));
 
@@ -481,7 +482,6 @@ function onChartClick(e, elements, chart) {{
     sentChart.update('none');
     forexChart.update('none');
 
-    // 発言テキストの同期とスクロール
     var targetCard = null;
     for (var i = 0; i < cards.length; i++) {{
       var cardTime = parseFloat(cards[i].getAttribute('data-time'));

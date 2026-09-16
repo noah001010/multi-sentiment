@@ -86,9 +86,15 @@ def load_and_filter_forex_data(csv_path: str, conference_start_time_str: str):
 def main():
     parser = argparse.ArgumentParser(description="Step 8: 学術論文準拠 OLS回帰分析")
     parser.add_argument(
+        "--date_code",
+        type=str,
+        default="23_0616",
+        help="会見日付コード (例: 23_0616)",
+    )
+    parser.add_argument(
         "--integrated_path",
         type=str,
-        default="output/integrated_results.csv",
+        default=None,
         help="Step 7 で出力した最終統合結果CSVのパス",
     )
     parser.add_argument(
@@ -111,7 +117,12 @@ def main():
     )
     args = parser.parse_args()
 
-    integrated_path = Path(args.integrated_path)
+    if args.integrated_path:
+        integrated_path = Path(args.integrated_path)
+    else:
+        date_path = Path("output") / args.date_code / "integrated_results.csv"
+        integrated_path = date_path if date_path.exists() else Path("output/integrated_results.csv")
+
     fin_path = Path(args.financial_path)
 
     if not integrated_path.exists():
