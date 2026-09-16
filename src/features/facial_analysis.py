@@ -73,6 +73,8 @@ def format_time_str(seconds: float) -> str:
     return f"{mins:02d}:{secs:02d}"
 
 
+import tempfile
+
 class FacialAnalyzer:
     def __init__(self):
         """
@@ -89,60 +91,109 @@ class FacialAnalyzer:
             device=device
         )
 
-    def process_video(self, video_path: str, skip_frames: int = 1, fps: float = 30.0) -> pd.DataFrame:
+    def process_video(self, video_path: str, skip_frames: int = 1, fps: float = 30.0, batch_size: int = 128) -> pd.DataFrame:
         """
-        Process a full video directly without face crop extraction.
+        Process a full video directly using OpenCV frame extraction and Py-Feat detection.
         Extracts 7 basic emotion probabilities and computes face_negative_score for each frame.
         Includes 'frame', 'timestamp' (seconds), and 'time_str' (MM:SS).
         """
-        logger.info(f"Processing full video directly: {video_path} (fps={fps}, skip_frames={skip_frames})...")
+        logger.info(f"Processing full video via OpenCV frame extraction: {video_path} (fps={fps}, skip_frames={skip_frames})...")
         
-        try:
-            # Py-Feat video detection
-            if hasattr(self.detector, "detect_video"):
-                detected = self.detector.detect_video(video_path, skip_frames=skip_frames)
-            else:
-                detected = self.detector.detect(video_path, skip_frames=skip_frames)
-        except Exception as e:
-            logger.error(f"Error executing Py-Feat detect_video on {video_path}: {e}")
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            logger.error(f"Cannot open video file with OpenCV: {video_path}")
             return pd.DataFrame()
 
-        if detected is None or len(detected) == 0:
-            logger.warning(f"No face detections in video: {video_path}")
-            return pd.DataFrame()
+        video_fps = cap.get(cv2.CAP_PROP_FPS)
+        if video_fps and video_fps > 0:
+            fps = float(video_fps)
 
         output_data = []
-        for idx, row in detected.iterrows():
-            frame_id = int(row.get("frame", idx * skip_frames))
-            timestamp = frame_id / fps
-            time_str = format_time_str(timestamp)
 
-            anger = float(row.get("anger", row.get("angry", 0.0)))
-            disgust = float(row.get("disgust", 0.0))
-            fear = float(row.get("fear", 0.0))
-            happiness = float(row.get("happiness", row.get("happy", 0.0)))
-            sadness = float(row.get("sadness", row.get("sad", 0.0)))
-            surprise = float(row.get("surprise", 0.0))
-            neutral = float(row.get("neutral", 0.0))
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            frame_count = 0
+            saved_frames = []
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                if frame_count % skip_frames == 0:
+                    img_name = f"frame_{frame_count:07d}.jpg"
+                    img_file = tmp_path / img_name
+                    cv2.imwrite(str(img_file), frame)
+                    saved_frames.append((frame_count, str(img_file)))
+                
+                frame_count += 1
 
-            # Curti & Kazinnik (2023) 準拠: Negative Facial Score
-            face_negative_score = anger + disgust + fear
+            cap.release()
 
-            output_data.append({
-                "frame": frame_id,
-                "timestamp": round(timestamp, 2),
-                "time_str": time_str,
-                "anger": anger,
-                "disgust": disgust,
-                "fear": fear,
-                "happiness": happiness,
-                "sadness": sadness,
-                "surprise": surprise,
-                "neutral": neutral,
-                "face_negative_score": face_negative_score
-            })
+            if not saved_frames:
+                logger.warning(f"No frames extracted from video: {video_path}")
+                return pd.DataFrame()
 
-        return pd.DataFrame(output_data).sort_values("frame")
+            logger.info(f"Extracted {len(saved_frames)} frames for facial analysis. Running Py-Feat Detector...")
+
+            for i in range(0, len(saved_frames), batch_size):
+                batch = saved_frames[i:i + batch_size]
+                batch_files = [f[1] for f in batch]
+                frame_ids = [f[0] for f in batch]
+
+                try:
+                    if hasattr(self.detector, "detect_image"):
+                        detected = self.detector.detect_image(batch_files, batch_size=len(batch_files))
+                    elif hasattr(self.detector, "detect"):
+                        detected = self.detector.detect(batch_files, batch_size=len(batch_files))
+                    else:
+                        detected = self.detector.detect_video(batch_files[0])
+                except Exception as e:
+                    logger.error(f"Py-Feat detection error on batch {i}: {e}")
+                    continue
+
+                if detected is None or len(detected) == 0:
+                    continue
+
+                for row_idx, row in detected.iterrows():
+                    if row_idx < len(frame_ids):
+                        f_id = frame_ids[row_idx]
+                    else:
+                        f_id = frame_ids[-1]
+
+                    timestamp = f_id / fps
+                    time_str = format_time_str(timestamp)
+
+                    anger = float(row.get("anger", row.get("angry", 0.0)))
+                    disgust = float(row.get("disgust", 0.0))
+                    fear = float(row.get("fear", 0.0))
+                    happiness = float(row.get("happiness", row.get("happy", 0.0)))
+                    sadness = float(row.get("sadness", row.get("sad", 0.0)))
+                    surprise = float(row.get("surprise", 0.0))
+                    neutral = float(row.get("neutral", 0.0))
+
+                    face_negative_score = anger + disgust + fear
+
+                    output_data.append({
+                        "frame": f_id,
+                        "timestamp": round(timestamp, 2),
+                        "time_str": time_str,
+                        "anger": anger,
+                        "disgust": disgust,
+                        "fear": fear,
+                        "happiness": happiness,
+                        "sadness": sadness,
+                        "surprise": surprise,
+                        "neutral": neutral,
+                        "face_negative_score": face_negative_score
+                    })
+
+        if not output_data:
+            logger.warning("No face detections obtained from Py-Feat.")
+            return pd.DataFrame()
+
+        df_out = pd.DataFrame(output_data).sort_values("frame")
+        return df_out
 
     def process_face_crops(self, crop_dir: str, batch_size: int = 256, fps: float = 30.0) -> pd.DataFrame:
         """
