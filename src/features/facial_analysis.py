@@ -94,12 +94,20 @@ class FacialAnalyzer:
     def _run_detection(self, batch_files: list) -> pd.DataFrame:
         import torch
         with torch.no_grad():
-            if hasattr(self.detector, "detect_image"):
-                return self.detector.detect_image(batch_files, batch_size=len(batch_files))
-            elif hasattr(self.detector, "detect"):
-                return self.detector.detect(batch_files, batch_size=len(batch_files))
-            else:
-                return self.detector.detect_video(batch_files[0])
+            try:
+                if hasattr(self.detector, "detect_image"):
+                    return self.detector.detect_image(batch_files, batch_size=len(batch_files), progress_bar=False)
+                elif hasattr(self.detector, "detect"):
+                    return self.detector.detect(batch_files, batch_size=len(batch_files), progress_bar=False)
+                else:
+                    return self.detector.detect_video(batch_files[0])
+            except TypeError:
+                if hasattr(self.detector, "detect_image"):
+                    return self.detector.detect_image(batch_files, batch_size=len(batch_files))
+                elif hasattr(self.detector, "detect"):
+                    return self.detector.detect(batch_files, batch_size=len(batch_files))
+                else:
+                    return self.detector.detect_video(batch_files[0])
 
     def process_video(self, video_path: str, skip_frames: int = 1, fps: float = 30.0, batch_size: int = 32) -> pd.DataFrame:
         """
@@ -145,12 +153,20 @@ class FacialAnalyzer:
                 logger.warning(f"No frames extracted from video: {video_path}")
                 return pd.DataFrame()
 
-            logger.info(f"Extracted {len(saved_frames)} frames for facial analysis. Running Py-Feat Detector...")
+            total_frames = len(saved_frames)
+            logger.info(f"Extracted {total_frames} frames for facial analysis. Running Py-Feat Detector...")
+            last_logged_pct = -1
 
-            for i in range(0, len(saved_frames), batch_size):
+            for i in range(0, total_frames, batch_size):
                 batch = saved_frames[i:i + batch_size]
                 batch_files = [f[1] for f in batch]
                 frame_ids = [f[0] for f in batch]
+
+                processed = i + len(batch)
+                pct = int((processed / total_frames) * 100)
+                if pct % 5 == 0 and pct != last_logged_pct:
+                    logger.info(f"表情解析進捗: {processed} / {total_frames} フレーム完了 ({pct}%)")
+                    last_logged_pct = pct
 
                 try:
                     detected = self._run_detection(batch_files)
