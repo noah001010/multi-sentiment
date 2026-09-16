@@ -74,6 +74,18 @@ def parse_args():
     )
     return parser.parse_args()
 
+def load_existing_csv(path: Path):
+    if path.exists() and path.stat().st_size > 0:
+        try:
+            return pd.read_csv(path)
+        except Exception as e:
+            logger.warning(f"既存ファイル {path} のロードに失敗したため再生成します ({e})")
+            try:
+                path.unlink()
+            except Exception:
+                pass
+    return None
+
 def main():
     args = parse_args()
     video_path = Path(args.video_path)
@@ -103,9 +115,10 @@ def main():
     from src.preprocessing.whisper_aligner import WhisperAligner
     transcription_path = text_dir / "transcription.csv"
     
-    if transcription_path.exists():
+    trans_df = load_existing_csv(transcription_path)
+    if trans_df is not None:
         logger.info(f"既存の文字起こし結果を使用します: {transcription_path}")
-        asr_result = {"segments": pd.read_csv(transcription_path).to_dict('records')}
+        asr_result = {"segments": trans_df.to_dict('records')}
     else:
         device = f"cuda:{args.gpu_id}" if args.gpu_id >= 0 and torch.cuda.is_available() else "cpu"
         logger.info(f"Whisper-large-v3 による文字起こしを実行中 (Device: {device})...")
@@ -115,9 +128,9 @@ def main():
     
     # 1-2. Diarization
     diarization_path = text_dir / "diarization.csv"
-    if diarization_path.exists():
+    diarization_df = load_existing_csv(diarization_path)
+    if diarization_df is not None:
         logger.info(f"既存の話者分離結果を使用します: {diarization_path}")
-        diarization_df = pd.read_csv(diarization_path)
     else:
         logger.info("pyannote.audio による話者分離を実行中...")
         import os
@@ -163,9 +176,9 @@ def main():
 
     # 2-1. テキスト感情推論 (FinBERT)
     text_feat_path = text_dir / "text_features.csv"
-    if text_feat_path.exists():
+    text_features_df = load_existing_csv(text_feat_path)
+    if text_features_df is not None:
         logger.info(f"既存のテキスト感情データを使用します: {text_feat_path}")
-        text_features_df = pd.read_csv(text_feat_path)
     else:
         from src.features.text_analysis import TextAnalyzer
         logger.info("FinBERT/ModernBERT モデルによるテキスト感情推論中...")
@@ -178,9 +191,9 @@ def main():
 
     # 2-2. 表情感情解析 (Py-Feat 動画全体連続解析)
     facial_feat_path = face_dir / "facial_features.csv"
-    if facial_feat_path.exists():
+    visual_df = load_existing_csv(facial_feat_path)
+    if visual_df is not None:
         logger.info(f"既存の全フレーム表情データを使用します: {facial_feat_path}")
-        visual_df = pd.read_csv(facial_feat_path)
     else:
         from src.features.facial_analysis import FacialAnalyzer
         logger.info("Py-Feat による動画全編の直接表情解析（全フレーム連続）を開始します...")
@@ -194,9 +207,9 @@ def main():
 
     # 2-3. 音声感情解析 (Wav2Vec2: audio_arousal, audio_valence)
     audio_feat_path = audio_dir / "audio_features.csv"
-    if audio_feat_path.exists():
+    audio_df = load_existing_csv(audio_feat_path)
+    if audio_df is not None:
         logger.info(f"既存の音声感情データを使用します: {audio_feat_path}")
-        audio_df = pd.read_csv(audio_feat_path)
     else:
         from src.features.audio_analysis import AudioAnalyzer
         logger.info("Wav2Vec2 による音声感情解析 (audio_arousal, audio_valence) を実行中...")
