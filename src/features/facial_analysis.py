@@ -91,13 +91,24 @@ class FacialAnalyzer:
             device=device
         )
 
-    def process_video(self, video_path: str, skip_frames: int = 1, fps: float = 30.0, batch_size: int = 128) -> pd.DataFrame:
+    def _run_detection(self, batch_files: list) -> pd.DataFrame:
+        import torch
+        with torch.no_grad():
+            if hasattr(self.detector, "detect_image"):
+                return self.detector.detect_image(batch_files, batch_size=len(batch_files))
+            elif hasattr(self.detector, "detect"):
+                return self.detector.detect(batch_files, batch_size=len(batch_files))
+            else:
+                return self.detector.detect_video(batch_files[0])
+
+    def process_video(self, video_path: str, skip_frames: int = 1, fps: float = 30.0, batch_size: int = 32) -> pd.DataFrame:
         """
         Process a full video directly using OpenCV frame extraction and Py-Feat detection.
         Extracts 7 basic emotion probabilities and computes face_negative_score for each frame.
         Includes 'frame', 'timestamp' (seconds), and 'time_str' (MM:SS).
         """
-        logger.info(f"Processing full video via OpenCV frame extraction: {video_path} (fps={fps}, skip_frames={skip_frames})...")
+        import torch
+        logger.info(f"Processing full video via OpenCV frame extraction: {video_path} (fps={fps}, skip_frames={skip_frames}, batch_size={batch_size})...")
         
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -142,15 +153,29 @@ class FacialAnalyzer:
                 frame_ids = [f[0] for f in batch]
 
                 try:
-                    if hasattr(self.detector, "detect_image"):
-                        detected = self.detector.detect_image(batch_files, batch_size=len(batch_files))
-                    elif hasattr(self.detector, "detect"):
-                        detected = self.detector.detect(batch_files, batch_size=len(batch_files))
-                    else:
-                        detected = self.detector.detect_video(batch_files[0])
+                    detected = self._run_detection(batch_files)
                 except Exception as e:
-                    logger.error(f"Py-Feat detection error on batch {i}: {e}")
-                    continue
+                    logger.warning(f"Py-Feat batch detection warning at index {i} ({e}). Clearing GPU cache & retrying in smaller sub-batches...")
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    
+                    sub_results = []
+                    sub_size = 8
+                    for j in range(0, len(batch_files), sub_size):
+                        sub_files = batch_files[j:j + sub_size]
+                        try:
+                            sub_det = self._run_detection(sub_files)
+                            if sub_det is not None and len(sub_det) > 0:
+                                sub_results.append(sub_det)
+                        except Exception as sub_e:
+                            logger.error(f"Sub-batch detection error: {sub_e}")
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                    
+                    detected = pd.concat(sub_results, ignore_index=True) if sub_results else None
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
                 if detected is None or len(detected) == 0:
                     continue
